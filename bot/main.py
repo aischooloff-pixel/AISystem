@@ -8,7 +8,7 @@ from __future__ import annotations
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.fsm.storage.memory import MemoryStorage, SimpleEventIsolation
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
 
@@ -28,7 +28,10 @@ def create_dispatcher() -> Dispatcher:
     Middleware остановки автоматики (``pause_check``) добавится в Блоке 7,
     роутеры квалификации, админки и комментариев — в Блоках 6–8.
     """
-    dispatcher = Dispatcher(storage=MemoryStorage())
+    # events_isolation сериализует обработку апдейтов одного пользователя:
+    # двойной тап по кнопке / два быстрых /start не выполняются параллельно
+    # (вторая линия защиты от дублей вместе с замком в upsert_contact)
+    dispatcher = Dispatcher(storage=MemoryStorage(), events_isolation=SimpleEventIsolation())
     dispatcher.include_router(start.router)
     return dispatcher
 

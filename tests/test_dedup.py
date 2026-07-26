@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from tests.conftest import FakeAirtable
 from bot.services.airtable import AirtableClient
 
@@ -43,6 +45,19 @@ async def test_three_comments_and_dm_scenario(client: AirtableClient, fake: Fake
     assert fake.tables["Contacts"][0]["fields"]["touches_count"] == 4
 
 
+async def test_concurrent_upserts_create_single_contact(
+    client: AirtableClient, fake: FakeAirtable
+) -> None:
+    """Гонка «поиск → создание»: пять ОДНОВРЕМЕННЫХ upsert одного человека
+    (двойной тап по кнопке, параллельные апдейты) → всё равно 1 запись.
+    Пер-пользовательский замок делает пару find→create атомарной."""
+    await asyncio.gather(
+        *(client.upsert_contact(TID, {"name": "Анна", "source": "site"}) for _ in range(5))
+    )
+    assert len(fake.tables["Contacts"]) == 1, "гонка создала дубль контакта"
+    assert fake.tables["Contacts"][0]["fields"]["touches_count"] == 5
+
+
 async def test_upsert_does_not_create_when_search_fails(
     client: AirtableClient, fake: FakeAirtable
 ) -> None:
@@ -74,6 +89,23 @@ async def test_first_upsert_sets_required_defaults(
     assert fields["touches_count"] == 1
     assert fields["paused"] is False
     assert fields["consent"] is True
+
+
+async def test_first_touch_source_never_overwritten(
+    client: AirtableClient, fake: FakeAirtable
+) -> None:
+    """source — «Источник ПЕРВОГО касания»: повторные события с другим
+    источником не перезаписывают его («Карта клиентского пути», п. 2)."""
+    await client.upsert_contact(
+        TID, {"name": "Анна", "source": "referral", "first_action": "/start"}
+    )
+    await client.upsert_contact(
+        TID, {"name": "Анна Петрова", "source": "telegram_comment", "first_action": "comment"}
+    )
+    fields = fake.tables["Contacts"][0]["fields"]
+    assert fields["source"] == "referral"  # первый источник неприкосновенен
+    assert fields["first_action"] == "/start"
+    assert fields["name"] == "Анна Петрова"  # обычные поля обновляются
 
 
 async def test_repeat_upsert_updates_last_contact_and_merges_data(

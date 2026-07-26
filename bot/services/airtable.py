@@ -81,6 +81,10 @@ class AirtableClient:
         self._retry_delays = retry_delays
         self._rate_window = rate_window
         self._semaphore = asyncio.Semaphore(rate_limit_per_sec)
+        # Пер-пользовательские замки upsert: пара «поиск → создание» не атомарна,
+        # два одновременных апдейта одного человека (двойной тап по кнопке)
+        # без замка создали бы дубль — нарушение правила «КРИТИЧНО» из ТЗ.
+        self._contact_locks: dict[int, asyncio.Lock] = {}
         self._http = httpx.AsyncClient(
             base_url=f"{API_URL}/{base_id}",
             headers={"Authorization": f"Bearer {api_key}"},
@@ -197,6 +201,18 @@ class AirtableClient:
         record = await self._find_one(self.contacts, f"{{telegram_id}}={int(telegram_id)}")
         return record if isinstance(record, dict) else None
 
+    async def find_contact_checked(self, telegram_id: int) -> tuple[bool, dict | None]:
+        """Поиск с различением сбоя: ``(ok, запись)``.
+
+        ``ok=False`` — Airtable не ответил, и «клиент не найден» утверждать
+        нельзя: маршрутизация (передан Юлии / пауза / новый) должна вести
+        себя осторожно, а не считать человека новым (ТЗ, Блок 5, шаг 3.1).
+        """
+        record = await self._find_one(self.contacts, f"{{telegram_id}}={int(telegram_id)}")
+        if record is False:
+            return False, None
+        return True, record
+
     async def create_contact(self, data: dict) -> dict | None:
         """Создаёт контакт. Обязательные поля первого касания — по умолчанию."""
         now = _now_iso()
@@ -221,11 +237,23 @@ class AirtableClient:
         """Обновляет контакт; ``updated_at`` проставляется автоматически."""
         return await self._update(self.contacts, record_id, {**data, "updated_at": _now_iso()})
 
+    # Поля «первого касания» («Карта клиентского пути», п. 2): фиксируются
+    # один раз при создании и не перезаписываются повторными событиями —
+    # source в Contacts это «Источник ПЕРВОГО касания».
+    FIRST_TOUCH_FIELDS = ("source", "source_detail", "utm", "first_action", "first_touch_date")
+
     async def upsert_contact(self, telegram_id: int, data: dict) -> dict | None:
         """Дедупликация (ТЗ, Часть 3): поиск → обновление, иначе создание.
 
         При сбое поиска запись НЕ создаётся — иначе появится дубль.
+        Пара «поиск → создание» атомарна в рамках процесса: пер-пользовательский
+        замок защищает от гонки параллельных апдейтов одного человека.
         """
+        lock = self._contact_locks.setdefault(int(telegram_id), asyncio.Lock())
+        async with lock:
+            return await self._upsert_contact_locked(telegram_id, data)
+
+    async def _upsert_contact_locked(self, telegram_id: int, data: dict) -> dict | None:
         found = await self._find_one(self.contacts, f"{{telegram_id}}={int(telegram_id)}")
         if found is False:
             logger.error(
@@ -237,10 +265,10 @@ class AirtableClient:
             return await self.create_contact({"telegram_id": int(telegram_id), **data})
         existing = found["fields"]
         updates = {
-            **data,
-            "last_contact_date": _now_iso(),
-            "touches_count": int(existing.get("touches_count") or 0) + 1,
+            k: v for k, v in data.items() if not (k in self.FIRST_TOUCH_FIELDS and existing.get(k))
         }
+        updates["last_contact_date"] = _now_iso()
+        updates["touches_count"] = int(existing.get("touches_count") or 0) + 1
         return await self.update_contact(found["id"], updates)
 
     async def get_contacts_by_status(self, status: str) -> list[dict] | None:
@@ -517,6 +545,10 @@ def get_client() -> AirtableClient:
 
 async def find_contact(telegram_id: int) -> dict | None:
     return await get_client().find_contact(telegram_id)
+
+
+async def find_contact_checked(telegram_id: int) -> tuple[bool, dict | None]:
+    return await get_client().find_contact_checked(telegram_id)
 
 
 async def create_contact(data: dict) -> dict | None:
