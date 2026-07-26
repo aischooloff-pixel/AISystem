@@ -1,4 +1,63 @@
 ════════════════════════════════════════
+СЕССИЯ 3 · 2026-07-26
+════════════════════════════════════════
+
+СТАТУС: Блок 3 (слой Airtable) — ЗАВЕРШЁН. Дальше — Блок 4 (AI-сервис).
+
+── СДЕЛАНО В ЭТОЙ СЕССИИ ──
+· В ТЕСТОВОМ аккаунте заказчика (не Юлии) создана Airtable-база
+  «Geikina Bot — Цифровой отдел продаж (TEST)», base id: appO4IOQl7JiMbyc4.
+  Все 5 таблиц (Contacts 37 полей, Touches 8, Comments 19, Posts 14,
+  Tasks 9), все single select-справочники из ТЗ Части 3. Живая проверка:
+  запись в Contacts создана и удалена, типы полей принимают наши значения.
+· services/airtable.py: AirtableClient (httpx.AsyncClient) + модульные
+  функции с сигнатурами из ТЗ. CRUD всех 5 таблиц, upsert-дедупликация,
+  status_history, build_timeline, get_report_data, export_table_to_csv.
+· scripts/setup_airtable.py: --check (сверка таблиц/полей/типов с моделью
+  ТЗ + инструкция по ручному созданию), --dump-schema (для backup.sh).
+· Тесты: conftest.py (FakeAirtable поверх httpx.MockTransport),
+  test_dedup.py (5 сообщений → 1 контакт/5 касаний; 3 комментария + ЛС →
+  1 контакт/4 касания), test_airtable.py (retry на 429, None без исключения
+  при отказе, сетевые ошибки, rate limit по времени, status_history,
+  timeline, CRUD, CSV), test_setup_airtable.py. Итог: 49/49 passed. black.
+· main.py: init_airtable(config) на старте.
+
+── ПРИНЯТЫЕ РЕШЕНИЯ ──
+· Дедупликация при сбое API: если поиск контакта упал (все retry
+  исчерпаны) — запись НЕ создаётся, upsert возвращает None. Лучше потерять
+  одно обновление, чем получить дубль (правило ТЗ «НИКОГДА не создавать
+  без проверки»). Внутренний _find_one возвращает False при сбое,
+  чтобы отличать «не найдено» от «ошибка».
+· created_at/updated_at — обычные dateTime-поля, проставляет бот
+  (MCP-создание базы не поддерживает типы createdTime/lastModifiedTime).
+  setup_airtable --check принимает и createdTime/lastModifiedTime,
+  если в базе Юлии поля заведут нативными.
+· Датовые поля — dateTime (Europe/Moscow): у last_contact_date нужна
+  точность до часа для таймаутов 24/72 ч (Блок 6). В ТЗ тип «Date» —
+  в Airtable это то же поле с включённым временем.
+· Rate limit: Semaphore(5), слот освобождается через 1 с после захвата
+  (не более 5 запросов в скользящее окно). Retry: (1 с, 3 с) на 429/5xx
+  и сетевых ошибках; задержки — параметр конструктора (в тестах 0).
+· get_stale_contacts фильтрует только assigned_to=ai и не paused —
+  переданные Юлии и остановленные не трогаются напоминаниями.
+· Статус нового контакта по умолчанию cold («Первичное касание,
+  квалификация не проводилась») — до квалификации Блока 6.
+· consent=True по умолчанию: человек сам написал боту. paused=False.
+· Новый пакет scripts/ добавлен в репозиторий (__init__.py для
+  python -m scripts.setup_airtable).
+
+── ОТКРЫТЫЕ ВОПРОСЫ К ЗАКАЗЧИКУ ──
+· FAQ v1.0 — по-прежнему нужен (Блок 2 не закрыт полностью).
+· Блок 11 (анкета) — ждёт подтверждения Юлии.
+· Для живого запуска бота с этой базой нужен Personal Access Token
+  (scope: data.records:read/write + schema.bases:read) и
+  AIRTABLE_BASE_ID=appO4IOQl7JiMbyc4 в .env на сервере.
+
+── СЛЕДУЮЩИЙ ШАГ ──
+Блок 4: prompts/ (system_prompt, qualifier, comment_analyzer,
+scenario_detector), services/ai.py, utils/validators.py (стоп-фразы).
+
+════════════════════════════════════════
 СЕССИЯ 2 · 2026-07-26
 ════════════════════════════════════════
 

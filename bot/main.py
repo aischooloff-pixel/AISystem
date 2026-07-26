@@ -14,6 +14,7 @@ from aiohttp import web
 
 from bot.config import Config, load_config
 from bot.handlers import start
+from bot.services.airtable import init_airtable
 from bot.services.knowledge import load_knowledge
 from bot.utils.logger import get_app_logger, setup_logging
 
@@ -58,6 +59,7 @@ def main() -> None:
     # База знаний читается на старте: состав и оценка токенов уходят в лог (ТЗ, Блок 2),
     # дальше AI-сервис работает с кэшем через get_knowledge().
     load_knowledge(config.knowledge_dir)
+    init_airtable(config)
 
     bot = Bot(
         token=config.telegram_bot_token,
