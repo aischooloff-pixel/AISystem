@@ -34,3 +34,9 @@ class Dialog(StatesGroup):
     # Квалификация завершена (warm/cold): свободный диалог, AI следит
     # за появлением запроса и триггерами передачи
     open_dialog = State()
+
+
+class AdminFlow(StatesGroup):
+    """Состояния Юлии (Блок 8: правка ответа на комментарий)."""
+
+    waiting_comment_reply = State()

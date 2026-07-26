@@ -13,7 +13,7 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 from aiohttp import web
 
 from bot.config import Config, load_config
-from bot.handlers import admin, callbacks, qualification, start
+from bot.handlers import admin, callbacks, comments, qualification, start
 from bot.middlewares.pause_check import PauseCheckMiddleware
 from bot.services.ai import init_ai
 from bot.services.airtable import init_airtable
@@ -36,6 +36,7 @@ def create_dispatcher(config: Config | None = None) -> Dispatcher:
     dispatcher = Dispatcher(storage=MemoryStorage(), events_isolation=SimpleEventIsolation())
     if config is not None:
         dispatcher.message.outer_middleware(PauseCheckMiddleware(config))
+    dispatcher.include_router(comments.router)
     dispatcher.include_router(start.router)
     dispatcher.include_router(admin.router)
     dispatcher.include_router(callbacks.router)

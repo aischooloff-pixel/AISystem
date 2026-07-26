@@ -389,6 +389,10 @@ class AirtableClient:
             {"filterByFormula": f"{{author_telegram_id}}={int(telegram_id)}"},
         )
 
+    async def get_comment(self, record_id: str) -> dict | None:
+        """Одна запись Comments по id (нужна кнопкам Блока 8)."""
+        return await self._request("GET", self.comments, f"/{record_id}")
+
     async def get_pending_comments(self) -> list[dict] | None:
         return await self._list_all(self.comments, {"filterByFormula": '{reply_status}="pending"'})
 
@@ -613,6 +617,10 @@ async def update_comment(record_id: str, data: dict) -> dict | None:
 
 async def get_comments_by_author(telegram_id: int) -> list[dict] | None:
     return await get_client().get_comments_by_author(telegram_id)
+
+
+async def get_comment(record_id: str) -> dict | None:
+    return await get_client().get_comment(record_id)
 
 
 async def get_pending_comments() -> list[dict] | None:
