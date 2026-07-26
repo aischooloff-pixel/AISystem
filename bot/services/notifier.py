@@ -75,10 +75,10 @@ def build_client_card(
         "ЗАПРОС",
         qualification.get("summary") or "—",
     ]
-    if answers.get("tried"):
-        parts += ["", "ЧТО УЖЕ ПРОБОВАЛ(А)", answers["tried"]]
-    if answers.get("goal"):
-        parts += ["", "ЧЕГО ХОЧЕТ", answers["goal"]]
+    # Карточка обязана отвечать на все 8 вопросов (раздел 15) — секции
+    # присутствуют всегда, даже если ответ в диалоге не прозвучал
+    parts += ["", "ЧТО УЖЕ ПРОБОВАЛ(А)", answers.get("tried") or "— (не прозвучало в диалоге)"]
+    parts += ["", "ЧЕГО ХОЧЕТ", answers.get("goal") or "— (не прозвучало в диалоге)"]
     parts += [
         "",
         "КЛЮЧЕВЫЕ ЦИТАТЫ",

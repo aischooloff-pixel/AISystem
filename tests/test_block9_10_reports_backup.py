@@ -94,8 +94,9 @@ def test_report_metrics_computed():
 
 
 class TimeoutCRM:
-    def __init__(self, monkeypatch, stale_records, touches=None):
+    def __init__(self, monkeypatch, stale_records, touches=None, stale_by_hours=None):
         self.stale_records = stale_records
+        self.stale_by_hours = stale_by_hours or {}
         self.touches_by_tid = touches or {}
         self.sent_touches: list[tuple] = []
         self.tasks: list[str] = []
@@ -103,6 +104,8 @@ class TimeoutCRM:
         self.status_changes: list[tuple] = []
 
         async def get_stale_contacts(hours):
+            if hours in self.stale_by_hours:
+                return self.stale_by_hours[hours]
             return self.stale_records
 
         async def get_touches(tid):
@@ -144,7 +147,7 @@ async def test_reminder_sent_once(monkeypatch):
     contact = record(
         {"telegram_id": 111, "name": "Анна", "last_contact_date": "2026-07-25T10:00:00"}
     )
-    crm = TimeoutCRM(monkeypatch, [contact])
+    crm = TimeoutCRM(monkeypatch, [contact], stale_by_hours={72: []})
     bot = FakeBot()
 
     sent = await process_reminders(bot, 24, 72)
@@ -152,17 +155,20 @@ async def test_reminder_sent_once(monkeypatch):
     assert bot.sent[0][0] == 111
     assert any("Проверить диалог с Анна" in t for t in crm.tasks)
 
-    # Второй прогон: касание-напоминание уже есть → повторно не шлём
+    # Второй прогон: касание-напоминание уже есть → повторно не шлём.
+    # Даты нарочно в разных форматах («Z» против naive) — сравнение
+    # должно быть по времени, а не по строкам.
     crm2 = TimeoutCRM(
         monkeypatch,
         [contact],
+        stale_by_hours={72: []},
         touches={
             111: [
                 record(
                     {
                         "type": "nurturing_touch",
                         "description": "Напоминание 24 ч: «…»",
-                        "date": "2026-07-26T11:00:00",
+                        "date": "2026-07-26T11:00:00.000Z",
                     }
                 )
             ]
@@ -171,6 +177,15 @@ async def test_reminder_sent_once(monkeypatch):
     bot2 = FakeBot()
     assert await process_reminders(bot2, 24, 72) == 0
     assert bot2.sent == []
+
+
+async def test_reminder_not_sent_to_over_72h_silent(monkeypatch):
+    """Молчащим ≥ 72 ч напоминание не шлём — их забирает process_cold."""
+    contact = record({"telegram_id": 555, "name": "Пётр", "last_contact_date": "2026-07-20"})
+    TimeoutCRM(monkeypatch, [contact])  # 72-часовая выборка совпадает с 24-часовой
+    bot = FakeBot()
+    assert await process_reminders(bot, 24, 72) == 0
+    assert bot.sent == []
 
 
 async def test_cold_after_72h(monkeypatch):

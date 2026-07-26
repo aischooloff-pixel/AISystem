@@ -188,8 +188,8 @@ async def _notify_potential_client(
         f"ПРЕДЛОЖЕННЫЙ ОТВЕТ\n«{analysis.get('suggested_reply') or '—'}»"
     )
     keyboard = None
-    if comment_record is not None and analysis.get("needs_reply"):
-        # msg_id нужен для публикации ответа реплаем на комментарий
+    if comment_record is not None:
+        # Кнопки — всегда (формат ТЗ); msg_id нужен для публикации реплаем
         keyboard = comment_keyboard(f"{comment_record['id']}:{message.message_id}")
     await notify_yulia(bot, config.telegram_admin_id, card, reply_markup=keyboard)
 
@@ -240,7 +240,9 @@ async def comment_action(
     if action == "edit":
         await state.set_state(AdminFlow.waiting_comment_reply)
         await state.update_data(comment_record_id=record_id, comment_msg_id=msg_id)
-        await _mark_notification(callback, "✏️ Пришлите свой вариант ответа сообщением")
+        await _mark_notification(
+            callback, "✏️ Пришлите свой вариант ответа сообщением (или /cancel — отменить)"
+        )
         return
 
     if action == "pub":
@@ -254,8 +256,10 @@ async def comment_action(
         if not reply_text:
             await notify_yulia(bot, config.telegram_admin_id, "Предложенный ответ пуст.")
             return
-        await _publish_reply(bot, config, record_id, msg_id, reply_text, "sent")
-        await _mark_notification(callback, "✅ Опубликовано")
+        published = await _publish_reply(bot, config, record_id, msg_id, reply_text, "sent")
+        # Отметка честная: при ошибке Telegram кнопки остаются для повтора
+        if published:
+            await _mark_notification(callback, "✅ Опубликовано")
 
 
 @router.message(AdminFlow.waiting_comment_reply, F.text, ~F.text.startswith("/"))
@@ -271,17 +275,20 @@ async def edited_reply_from_yulia(
     await state.clear()
     if not record_id:
         return
-    await _publish_reply(bot, config, record_id, msg_id, message.text, "edited")
+    published = await _publish_reply(bot, config, record_id, msg_id, message.text, "edited")
     try:
-        await message.answer("✅ Опубликовано")
+        await message.answer("✅ Опубликовано" if published else "⚠️ Не удалось опубликовать")
     except Exception:
         logger.exception("Не удалось подтвердить публикацию")
 
 
 async def _publish_reply(
     bot: Bot, config: Config, record_id: str, msg_id: int | None, text: str, status: str
-) -> None:
-    """Публикация ответа от имени бота реплаем на комментарий."""
+) -> bool:
+    """Публикация ответа от имени бота реплаем на комментарий.
+
+    ``True`` — опубликовано и зафиксировано в CRM; ``False`` — не удалось.
+    """
     try:
         await bot.send_message(
             config.telegram_discussion_group_id, text, reply_to_message_id=msg_id
@@ -291,8 +298,9 @@ async def _publish_reply(
         await notify_yulia(
             bot, config.telegram_admin_id, "Не удалось опубликовать ответ (ошибка Telegram)."
         )
-        return
+        return False
     await airtable.update_comment(
         record_id, {"reply_status": status, "final_reply": text, "processed": True}
     )
     logger.info("Ответ на комментарий %s опубликован (%s)", record_id, status)
+    return True

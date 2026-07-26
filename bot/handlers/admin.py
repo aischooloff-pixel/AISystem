@@ -8,6 +8,8 @@ import time
 from datetime import datetime, timezone
 
 from aiogram import Bot, F, Router
+from aiogram.filters import BaseFilter
+from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
 from bot.config import Config
@@ -21,6 +23,23 @@ from bot.utils.logger import get_app_logger
 logger = get_app_logger()
 
 router = Router(name="admin")
+
+
+class _AdminOrIdle(BaseFilter):
+    """Пропускает в admin-роутер Юлию всегда, остальных — только вне диалога.
+
+    Иначе клиент посреди квалификации, написавший «/stop», получил бы
+    «Команда недоступна» вместо обработки своего ответа FSM-хендлером.
+    Пользователь без состояния всё же получает явный отказ (Блок 12).
+    """
+
+    async def __call__(self, message: Message, config: Config, state: FSMContext) -> bool:
+        if message.from_user is not None and message.from_user.id == config.telegram_admin_id:
+            return True
+        return await state.get_state() is None
+
+
+router.message.filter(_AdminOrIdle())
 
 START_TIME = time.monotonic()
 
@@ -83,6 +102,17 @@ async def cmd_help(message: Message, config: Config) -> None:
         await _reply(message, "Команда недоступна.")
         return
     await _reply(message, HELP)
+
+
+@router.message(F.text == "/cancel")
+async def cmd_cancel(message: Message, config: Config, state: FSMContext) -> None:
+    """Выход из режима правки ответа на комментарий (Блок 8)."""
+    if not _is_admin(message, config):
+        await _reply(message, "Команда недоступна.")
+        return
+    await state.clear()
+    _log_action(message, "cancel")
+    await _reply(message, "Ок, отменил. Режим правки закрыт.")
 
 
 @router.message(F.text.startswith("/info"))

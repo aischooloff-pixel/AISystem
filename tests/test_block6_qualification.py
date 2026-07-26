@@ -197,7 +197,11 @@ async def test_scenario_a_two_questions_then_handoff(monkeypatch, fake_ai, confi
 
     m2 = FakeMessage(make_user(), "Повторяются конфликты в семье")
     await qual.a_answer_1(m2, state)
-    assert m2.sent == [texts.QUESTION_4]
+    # Вопросы сценария A — дословно из ТЗ («хотите достичь», не «получить»)
+    assert m2.sent == [texts.A_QUESTION_2]
+    assert texts.A_INTRO.endswith(texts.A_QUESTION_1)
+    assert texts.A_QUESTION_1 == "С какой ситуацией хотите разобраться?"
+    assert texts.A_QUESTION_2 == "Какого результата хотите достичь?"
     assert await state.get_state() == Dialog.a_question_2.state
 
     fake_ai.qualifications = [valid_qualification(status="warm", confidence=70)]
@@ -448,6 +452,63 @@ async def test_non_text_message_in_dialog(monkeypatch, fake_ai, config):
     m = FakeMessage(make_user(), text=None, content_type="voice")
     await qual.non_text_in_dialog(m)
     assert m.sent == [texts.ASK_TEXT_PLEASE]
+
+
+async def test_uncertain_non_target_mid_flow_goes_to_yulia(monkeypatch, fake_ai, config):
+    """Неуверенный (confidence < 85) вердикт non_target на промежуточном шаге
+    НЕ закрывает диалог — передача Юлии («лучше лишняя передача»)."""
+    crm = CRM(monkeypatch)
+    bot = FakeBot()
+    state = make_state()
+    await state.set_state(Dialog.b_question_2)
+
+    fake_ai.qualifications = [
+        valid_qualification(status="non_target", confidence=40, needs_yulia=False)
+    ]
+    m = FakeMessage(make_user(), "неоднозначное сообщение")
+    await qual.b_answer_2(m, state, bot, config)
+
+    assert m.sent == [texts.HANDOFF_MESSAGE]  # передача, а не прощание
+    assert crm.contact["fields"]["assigned_to"] == "yulia"
+    assert bot.sent, "карточка Юлии не отправлена"
+
+
+async def test_client_turn_updates_last_contact_date(monkeypatch, fake_ai, config):
+    """Каждое сообщение клиента освежает last_contact_date — от него
+    считаются таймауты 24/72 ч."""
+    crm = CRM(monkeypatch)
+    state = make_state()
+    await state.set_state(Dialog.waiting_first_message)
+    fake_ai.scenarios = [{"scenario": "B_problem", "confidence": 91, "reason": "x"}]
+    m = FakeMessage(make_user(), "Всё повторяется")
+    await qual.first_message(m, state, FakeBot(), config)
+    assert any("last_contact_date" in u for u in crm.updates)
+
+
+async def test_blocked_contact_saved_silently_in_handler(monkeypatch, fake_ai, config):
+    """Гонка со сбоем Airtable в middleware: хендлер сам не запускает
+    автоматику для переданного клиента — сообщение сохраняется молча."""
+    crm = CRM(monkeypatch, fields={"paused": True})
+    state = make_state()
+    await state.set_state(Dialog.b_question_2)
+    m = FakeMessage(make_user(), "Есть новости?")
+    await qual.b_answer_2(m, state, FakeBot(), config)
+    assert m.sent == []  # AI не отвечал
+    history = json.loads(crm.contact["fields"]["conversation_history"])
+    assert history[-1]["text"] == "Есть новости?"
+
+
+async def test_answers_non_dict_from_model_sanitized(monkeypatch, fake_ai, config):
+    """Лишний ключ answers не-словарём от модели не роняет передачу."""
+    crm = CRM(monkeypatch)
+    state = make_state()
+    await state.set_state(Dialog.b_question_5)
+    fake_ai.qualifications = [
+        valid_qualification(status="hot", confidence=95, answers="строка вместо словаря")
+    ]
+    m = FakeMessage(make_user(), "готов")
+    await qual.b_answer_5(m, state, FakeBot(), config)
+    assert m.sent == [texts.HANDOFF_MESSAGE]  # не упало
 
 
 async def test_open_dialog_upgrade_to_hot(monkeypatch, fake_ai, config):

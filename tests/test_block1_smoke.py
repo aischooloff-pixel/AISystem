@@ -37,9 +37,9 @@ REQUIRED_VARS = [
 
 VALID_ENV = {
     "TELEGRAM_BOT_TOKEN": "42:TEST_TOKEN",
-    "TELEGRAM_ADMIN_ID": "111",
-    "TELEGRAM_CHANNEL_ID": "-100200",
-    "TELEGRAM_DISCUSSION_GROUP_ID": "-100300",
+    "TELEGRAM_ADMIN_ID": "999",
+    "TELEGRAM_CHANNEL_ID": "-100",
+    "TELEGRAM_DISCUSSION_GROUP_ID": "-200",
     "WEBHOOK_URL": "https://example.com/",
     "OPENAI_API_KEY": "sk-test",
     "AIRTABLE_API_KEY": "pat-test",
@@ -84,7 +84,7 @@ def test_config_loads_and_has_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     for var, value in VALID_ENV.items():
         monkeypatch.setenv(var, value)
     config = load_config(env_file=None)
-    assert config.telegram_admin_id == 111
+    assert config.telegram_admin_id == 999
     assert config.webhook_path == "/webhook"
     assert config.webapp_port == 8080
     # Порог 85% из «Критериев квалификации», п. 9
@@ -160,9 +160,14 @@ def test_repeated_setup_does_not_duplicate_handlers(tmp_path: Path) -> None:
     assert app_log.count("одна запись") == 1
 
 
-def test_dispatcher_builds_with_start_router() -> None:
-    """Приложение собирается: диспетчер создаётся, роутер /start подключён."""
-    from bot.main import create_dispatcher
+def test_dispatcher_builds_with_all_routers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Приложение собирается: все роутеры подключены (общий диспетчер —
+    роутеры aiogram нельзя переподключать)."""
+    for var, value in VALID_ENV.items():
+        monkeypatch.setenv(var, value)
+    from bot.config import load_config
+    from tests.conftest import get_shared_dispatcher
 
-    dispatcher = create_dispatcher()
-    assert any(router.name == "start" for router in dispatcher.sub_routers)
+    dispatcher = get_shared_dispatcher(load_config(env_file=None))
+    names = {router.name for router in dispatcher.sub_routers}
+    assert {"start", "qualification", "admin", "admin_callbacks", "comments"} <= names

@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 
 from aiogram import Bot
 
@@ -38,17 +39,38 @@ def _name(record: dict) -> str:
     return record.get("fields", {}).get("name") or str(_tid(record))
 
 
+def _parse_moment(raw: str | None) -> datetime | None:
+    """ISO-строка Airtable → aware-datetime (даты без времени и «Z» — тоже)."""
+    if not raw:
+        return None
+    try:
+        moment = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment
+
+
 async def _reminder_already_sent(telegram_id: int, last_contact: str) -> bool:
-    """Напоминание после последнего сообщения клиента уже уходило?"""
+    """Напоминание после последнего сообщения клиента уже уходило?
+
+    Даты сравниваются как datetime: Airtable может отдавать «Z», смещение
+    или дату без времени — лексикографическое сравнение строк здесь врёт.
+    """
     touches = await airtable.get_touches(telegram_id)
     if touches is None:
         return True  # Airtable сбоит — лучше не слать, чем задвоить
+    last_moment = _parse_moment(last_contact)
     for touch in touches:
         fields = touch.get("fields", {})
         if fields.get("type") == "nurturing_touch" and REMINDER_NOTE in (
             fields.get("description") or ""
         ):
-            if (fields.get("date") or "") >= (last_contact or ""):
+            touch_moment = _parse_moment(fields.get("date"))
+            if touch_moment is None or last_moment is None:
+                return True  # непарсибельные даты — не рискуем дублем
+            if touch_moment >= last_moment:
                 return True
     return False
 
@@ -66,8 +88,13 @@ async def process_reminders(bot: Bot, reminder_hours: int, cold_hours: int) -> i
     if stale is None:
         logger.error("check_timeouts: Airtable недоступен, напоминания пропущены")
         return 0
+    # Молчащие ≥ 72 ч — зона process_cold: им напоминание уже не шлём
+    beyond_cold = await airtable.get_stale_contacts(cold_hours)
+    cold_ids = {record["id"] for record in beyond_cold} if beyond_cold is not None else set()
     sent = 0
     for record in stale:
+        if record["id"] in cold_ids:
+            continue
         fields = record.get("fields", {})
         # Этап квалификации: она ещё не завершена, статусы финальных маршрутов не трогаем
         if fields.get("qualification_completed") or fields.get("result"):

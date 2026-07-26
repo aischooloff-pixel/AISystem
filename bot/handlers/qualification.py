@@ -85,7 +85,9 @@ def _history_from(contact: dict) -> list[dict]:
         return []
 
 
-async def _append_history(contact: dict, role: str, text: str) -> list[dict]:
+async def _append_history(
+    contact: dict, role: str, text: str, extra_updates: dict | None = None
+) -> list[dict]:
     """Дописывает реплику в conversation_history (полная переписка, ТЗ Часть 3)."""
     history = _history_from(contact)
     history.append(
@@ -96,7 +98,11 @@ async def _append_history(contact: dict, role: str, text: str) -> list[dict]:
         }
     )
     await airtable.update_contact(
-        contact["id"], {"conversation_history": json.dumps(history, ensure_ascii=False)}
+        contact["id"],
+        {
+            "conversation_history": json.dumps(history, ensure_ascii=False),
+            **(extra_updates or {}),
+        },
     )
     contact.setdefault("fields", {})["conversation_history"] = json.dumps(
         history, ensure_ascii=False
@@ -105,12 +111,50 @@ async def _append_history(contact: dict, role: str, text: str) -> list[dict]:
 
 
 async def _save_client_turn(contact: dict, message_text: str, touch_description: str) -> list:
-    history = await _append_history(contact, "client", message_text)
+    # last_contact_date обновляется КАЖДЫМ сообщением клиента — от него
+    # считаются таймауты 24/72 ч; иначе напоминание пришло бы посреди
+    # живого диалога (ТЗ, Блок 6: «нет ответа N часов»)
+    history = await _append_history(
+        contact,
+        "client",
+        message_text,
+        {"last_contact_date": datetime.now(timezone.utc).isoformat(timespec="seconds")},
+    )
     telegram_id = int(contact["fields"].get("telegram_id") or 0)
     await airtable.add_touch(
         telegram_id, "question_answered", touch_description, raw_content=message_text[:1000]
     )
     return history
+
+
+async def _contact_for_dialog(message: Message) -> dict | None:
+    """Контакт для содержательного диалога; ``None`` — диалог не продолжать
+    (уже отвечено или сообщение сохранено молча).
+
+    Страховка от гонки: если middleware pause_check пропустил сообщение
+    из-за сбоя Airtable, а к этому моменту CRM ответила — переданный Юлии
+    клиент НЕ должен получить автоматику (ТЗ Юлии, п. 6).
+    """
+    user = message.from_user
+    if user is None:
+        return None
+    contact = await _get_or_create_contact(user)
+    if contact is None:
+        await _reply_safe(message, texts.TECH_ERROR)
+        return None
+    fields = contact.get("fields", {})
+    if fields.get("paused") or fields.get("assigned_to") == "yulia":
+        text = message.text or message.caption or f"<{message.content_type}>"
+        await _append_history(contact, "client", text)
+        await airtable.add_touch(
+            user.id,
+            "dm_start",
+            "Сообщение от переданного клиента (поймано хендлером)",
+            raw_content=text[:1000],
+        )
+        logger.info("Клиент %s у Юлии — автоматика в хендлере не запущена", user.id)
+        return None
+    return contact
 
 
 async def _send_bot_turn(message: Message, contact: dict, text: str) -> None:
@@ -179,7 +223,10 @@ async def _finish(
     fields = contact.get("fields", {})
     status = qualification.get("status") or "warm"
     state_data = await state.get_data()
-    qualification.setdefault("answers", {}).update(
+    # Модель могла вернуть лишний ключ answers не-словарём — не даём упасть
+    if not isinstance(qualification.get("answers"), dict):
+        qualification["answers"] = {}
+    qualification["answers"].update(
         {
             "tried": state_data.get("q3"),
             "goal": state_data.get("q4"),
@@ -253,6 +300,15 @@ async def _intermediate_step(
     if qualification is None:
         await _ai_error(message, contact)
         return
+    if (
+        qualification.get("status") == "non_target"
+        and int(qualification.get("confidence") or 0) < config.ai_confidence_threshold
+    ):
+        # Неуверенный вердикт «нецелевой» не имеет права закрыть диалог:
+        # «AI не уверен → немедленная передача» (ТЗ, Блок 6) — решает Юлия
+        qualification["needs_yulia"] = True
+        if not qualification.get("needs_yulia_reason"):
+            qualification["needs_yulia_reason"] = "Требуется экспертная оценка"
     enough = (
         qualification.get("needs_yulia")
         or qualification.get("status") in ("hot", "non_target")
@@ -274,9 +330,8 @@ async def first_message(message: Message, state: FSMContext, bot: Bot, config: C
     user = message.from_user
     if user is None:
         return
-    contact = await _get_or_create_contact(user)
+    contact = await _contact_for_dialog(message)
     if contact is None:
-        await _reply_safe(message, texts.TECH_ERROR)
         return
     await _save_client_turn(contact, message.text, "Первое содержательное сообщение")
 
@@ -344,14 +399,13 @@ async def a_answer_1(message: Message, state: FSMContext) -> None:
     user = message.from_user
     if user is None:
         return
-    contact = await _get_or_create_contact(user)
+    contact = await _contact_for_dialog(message)
     if contact is None:
-        await _reply_safe(message, texts.TECH_ERROR)
         return
     await _save_client_turn(contact, message.text, "Сценарий A, ответ на вопрос 1")
     await state.update_data(a1=message.text)
-    # Вопрос 2 сценария A: «Какого результата хотите достичь?»
-    await _send_bot_turn(message, contact, texts.QUESTION_4)
+    # Вопрос 2 сценария A — дословно из ТЗ («достичь», не «получить»)
+    await _send_bot_turn(message, contact, texts.A_QUESTION_2)
     await state.set_state(Dialog.a_question_2)
 
 
@@ -360,11 +414,12 @@ async def a_answer_2(message: Message, state: FSMContext, bot: Bot, config: Conf
     user = message.from_user
     if user is None:
         return
-    contact = await _get_or_create_contact(user)
+    contact = await _contact_for_dialog(message)
     if contact is None:
-        await _reply_safe(message, texts.TECH_ERROR)
         return
     await _save_client_turn(contact, message.text, "Сценарий A, ответ на вопрос 2")
+    # Ответ на «Какого результата хотите достичь?» → секция «ЧЕГО ХОЧЕТ» карточки
+    await state.update_data(q4=message.text)
 
     # Квалификация нужна только для карточки; статус — hot безусловно
     # (ТЗ, сценарий A: доп. квалификация не проводится, немедленная передача)
@@ -401,9 +456,8 @@ async def _b_step(
     user = message.from_user
     if user is None:
         return
-    contact = await _get_or_create_contact(user)
+    contact = await _contact_for_dialog(message)
     if contact is None:
-        await _reply_safe(message, texts.TECH_ERROR)
         return
     history = await _save_client_turn(contact, message.text, touch_note)
     await state.update_data(**{data_key: message.text})
@@ -479,9 +533,8 @@ async def c_message(message: Message, state: FSMContext, bot: Bot, config: Confi
     user = message.from_user
     if user is None:
         return
-    contact = await _get_or_create_contact(user)
+    contact = await _contact_for_dialog(message)
     if contact is None:
-        await _reply_safe(message, texts.TECH_ERROR)
         return
     await _save_client_turn(contact, message.text, "Сообщение в информационном диалоге")
 
@@ -515,9 +568,8 @@ async def open_dialog_message(
     user = message.from_user
     if user is None:
         return
-    contact = await _get_or_create_contact(user)
+    contact = await _contact_for_dialog(message)
     if contact is None:
-        await _reply_safe(message, texts.TECH_ERROR)
         return
     history = await _save_client_turn(contact, message.text, "Сообщение после квалификации")
 

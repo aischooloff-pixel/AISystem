@@ -6,8 +6,6 @@
 from __future__ import annotations
 
 from aiogram import Bot, Dispatcher
-from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage, SimpleEventIsolation
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
@@ -74,10 +72,9 @@ def main() -> None:
     init_airtable(config)
     init_ai(config)
 
-    bot = Bot(
-        token=config.telegram_bot_token,
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
-    )
+    # Без parse_mode: во всех текстах — обычный текст, а HTML-режим молча
+    # ронял бы доставку карточек с «<» в цитатах клиентов (TelegramBadRequest)
+    bot = Bot(token=config.telegram_bot_token)
     dispatcher = create_dispatcher(config)
     dispatcher["config"] = config
     dispatcher.startup.register(on_startup)

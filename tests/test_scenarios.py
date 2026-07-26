@@ -110,7 +110,7 @@ async def test_scenario_05_timeouts(monkeypatch):
     from scripts.check_timeouts import process_cold, process_reminders
 
     contact = record({"telegram_id": 111, "name": "Анна", "last_contact_date": "2026-07-25"})
-    crm = TimeoutCRM(monkeypatch, [contact])
+    crm = TimeoutCRM(monkeypatch, [contact], stale_by_hours={72: []})
     bot = FakeBot()
     assert await process_reminders(bot, 24, 72) == 1
     assert bot.sent == [(111, texts.REMINDER_24H)]

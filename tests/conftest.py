@@ -117,6 +117,22 @@ def fake() -> FakeAirtable:
     return FakeAirtable()
 
 
+# Роутеры aiogram — модульные синглтоны: create_dispatcher можно вызвать
+# только один раз за процесс (как и в проде). Единый диспетчер для всех
+# тестов, которым нужна полная сборка.
+_shared_dispatcher = None
+
+
+def get_shared_dispatcher(config):
+    global _shared_dispatcher
+    if _shared_dispatcher is None:
+        from bot.main import create_dispatcher
+
+        _shared_dispatcher = create_dispatcher(config)
+        _shared_dispatcher["config"] = config
+    return _shared_dispatcher
+
+
 @pytest.fixture
 async def client(fake: FakeAirtable):
     """AirtableClient поверх FakeAirtable: без задержек retry, без rate limit."""
