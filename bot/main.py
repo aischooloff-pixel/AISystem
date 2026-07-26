@@ -14,6 +14,7 @@ from aiohttp import web
 
 from bot.config import Config, load_config
 from bot.handlers import start
+from bot.services.knowledge import load_knowledge
 from bot.utils.logger import get_app_logger, setup_logging
 
 logger = get_app_logger()
@@ -54,6 +55,9 @@ def main() -> None:
     config = load_config()
     setup_logging(config.log_dir, config.log_level)
     logger.info("Запуск бота (host=%s, port=%s)...", config.webapp_host, config.webapp_port)
+    # База знаний читается на старте: состав и оценка токенов уходят в лог (ТЗ, Блок 2),
+    # дальше AI-сервис работает с кэшем через get_knowledge().
+    load_knowledge(config.knowledge_dir)
 
     bot = Bot(
         token=config.telegram_bot_token,
