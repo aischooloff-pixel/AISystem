@@ -179,6 +179,20 @@ def validate_qualification(data: dict) -> list[str]:
     return problems
 
 
+INFO_ANSWER_REQUIRED = ("answer", "needs_yulia", "reason")
+
+
+def validate_info_answer(data: dict) -> list[str]:
+    """Проблемы ответа функции «информационный ответ» (сценарий C)."""
+    problems: list[str] = []
+    _check_required(data, INFO_ANSWER_REQUIRED, problems)
+    if "answer" in data and not isinstance(data["answer"], str):
+        problems.append(f"answer: не строка ({data['answer']!r})")
+    if "needs_yulia" in data and not isinstance(data["needs_yulia"], bool):
+        problems.append(f"needs_yulia: не булево ({data['needs_yulia']!r})")
+    return problems
+
+
 COMMENT_REQUIRED = (
     "topic",
     "emotion",

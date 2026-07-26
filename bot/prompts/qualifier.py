@@ -55,6 +55,42 @@ QUALIFICATION_PROMPT_TEMPLATE = """Проведи квалификацию кл�
 {json_format}"""
 
 
+INFO_ANSWER_JSON_FORMAT = (
+    '{"answer": "текст ответа человеку", "needs_yulia": false, '
+    '"reason": "краткое основание или null"}'
+)
+
+INFO_ANSWER_PROMPT_TEMPLATE = """Человек задал информационный вопрос (сценарий C — «Информационный интерес»).
+
+Правила («Логика принятия решений AI v1.0», раздел 4В):
+- ответь на вопрос строго по базе знаний, коротко и понятным языком;
+- НЕ начинай квалификацию и не задавай вопросов без необходимости;
+- не продавай и не подталкивай; допустимо мягко упомянуть диагностику,
+  только если вопрос прямо о ней;
+- если ответа в базе знаний нет — не придумывай: скажи, что вопрос требует
+  уточнения, и поставь needs_yulia=true;
+- needs_yulia=true также при любом основании немедленной передачи
+  (просит личный контакт, B2B, обучение ITC, конфликт и т.п.).
+
+Предыдущий диалог (может быть пуст):
+\"\"\"{history}\"\"\"
+
+Вопрос человека:
+\"\"\"{question}\"\"\"
+
+Ответь строго JSON без пояснений, в формате:
+{json_format}"""
+
+
+def build_info_answer_prompt(question: str, history: str = "") -> str:
+    """Промпт ответа на информационный вопрос (сценарий C)."""
+    return INFO_ANSWER_PROMPT_TEMPLATE.format(
+        question=sanitize_user_text(question),
+        history=sanitize_user_text(history),
+        json_format=INFO_ANSWER_JSON_FORMAT,
+    )
+
+
 def build_qualification_prompt(conversation: str | list[dict]) -> str:
     """Промпт квалификации по истории диалога.
 

@@ -13,7 +13,7 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 from aiohttp import web
 
 from bot.config import Config, load_config
-from bot.handlers import start
+from bot.handlers import qualification, start
 from bot.services.ai import init_ai
 from bot.services.airtable import init_airtable
 from bot.services.knowledge import load_knowledge
@@ -33,6 +33,7 @@ def create_dispatcher() -> Dispatcher:
     # (вторая линия защиты от дублей вместе с замком в upsert_contact)
     dispatcher = Dispatcher(storage=MemoryStorage(), events_isolation=SimpleEventIsolation())
     dispatcher.include_router(start.router)
+    dispatcher.include_router(qualification.router)
     return dispatcher
 
 

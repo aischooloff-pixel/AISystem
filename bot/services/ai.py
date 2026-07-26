@@ -18,7 +18,7 @@ import httpx
 from bot import texts
 from bot.config import Config
 from bot.prompts.comment_analyzer import build_comment_prompt
-from bot.prompts.qualifier import build_qualification_prompt
+from bot.prompts.qualifier import build_info_answer_prompt, build_qualification_prompt
 from bot.prompts.scenario_detector import build_scenario_prompt
 from bot.prompts.system_prompt import build_system_prompt
 from bot.utils.logger import get_app_logger
@@ -206,14 +206,18 @@ class AIService:
     # ── Функция 2: квалификация ──
 
     async def qualify(
-        self, conversation: str | list[dict], *, knowledge: str | None = None
+        self, conversation: str | list[dict], *, final: bool = True, knowledge: str | None = None
     ) -> dict | None:
         """Квалификация по диалогу. Применяет пост-правила ТЗ:
 
         - ``confidence < порога`` → ``needs_yulia=true`` с пометкой
-          «Требуется экспертная оценка» (Критерии квалификации, п. 9);
+          «Требуется экспертная оценка» (Критерии квалификации, п. 9).
+          Применяется только при ``final=True``: промежуточные проверки
+          достаточности (Блок 6, «завершать квалификацию сразу после
+          получения достаточной информации») низкую уверенность трактуют
+          как «информации мало, задай следующий вопрос», а не как передачу;
         - стоп-фраза в ``bot_response`` → WARNING, нейтральный шаблон,
-          ``needs_yulia=true`` (валидация, шаг 5).
+          ``needs_yulia=true`` (валидация, шаг 5) — всегда.
         """
         data = await self._ask_json(
             build_qualification_prompt(conversation),
@@ -223,7 +227,7 @@ class AIService:
         if data is None:
             return None
 
-        if data["confidence"] < self.confidence_threshold:
+        if final and data["confidence"] < self.confidence_threshold:
             # Порог 85% из «Критериев квалификации», п. 9: ниже — решает Юлия.
             # Пометка «Требуется экспертная оценка» обязательна ВСЕГДА (ТЗ);
             # причину, названную моделью, сохраняем после пометки.
@@ -245,6 +249,31 @@ class AIService:
             data["needs_yulia"] = True
             if not data.get("needs_yulia_reason"):
                 data["needs_yulia_reason"] = f"Стоп-фраза в ответе AI: {stop_phrase}"
+        return data
+
+    # ── Ответ на информационный вопрос (сценарий C, Блок 6) ──
+
+    async def answer_info(
+        self, question: str, *, history: str = "", knowledge: str | None = None
+    ) -> dict | None:
+        """Ответ на информационный вопрос без квалификации (сценарий C).
+
+        Стоп-фраза в ответе → нейтральный шаблон + ``needs_yulia=true``.
+        """
+        data = await self._ask_json(
+            build_info_answer_prompt(question, history),
+            validators.validate_info_answer,
+            knowledge=knowledge,
+        )
+        if data is None:
+            return None
+        stop_phrase = validators.find_stop_phrase(data.get("answer"))
+        if stop_phrase:
+            logger.warning(
+                "Стоп-фраза в информационном ответе: %r — нейтральный шаблон", stop_phrase
+            )
+            data["answer"] = texts.NEUTRAL_FALLBACK
+            data["needs_yulia"] = True
         return data
 
     # ── Функция 3: анализ комментариев ──
