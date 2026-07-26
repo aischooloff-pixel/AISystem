@@ -548,6 +548,38 @@ async def open_dialog_message(
     await _send_bot_turn(message, contact, bot_response)
 
 
+# ── Восстановление после рестарта: сообщение без состояния FSM ──
+
+
+@router.message(StateFilter(None), F.text)
+async def restore_after_restart(
+    message: Message, state: FSMContext, bot: Bot, config: Config
+) -> None:
+    """Личное сообщение без состояния FSM (рестарт бота / клиент без /start).
+
+    MemoryStorage теряет состояния при перезапуске — клиент посреди диалога
+    не должен получать тишину (Блок 12: «рестарт бота во время диалога»).
+    Квалифицированные продолжают свободный диалог, остальные — с определения
+    сценария. Переданные Юлии сюда не дойдут (middleware pause_check).
+    """
+    if message.chat.type != "private" or message.from_user is None:
+        return
+    if (message.text or "").startswith("/"):
+        return  # неизвестные команды — не наша зона
+    if message.from_user.id == config.telegram_admin_id:
+        return  # Юлия не клиент — не заводим на неё контакт
+    contact = await _get_or_create_contact(message.from_user)
+    if contact is None:
+        await _reply_safe(message, texts.TECH_ERROR)
+        return
+    if contact.get("fields", {}).get("qualification_completed"):
+        await state.set_state(Dialog.open_dialog)
+        await open_dialog_message(message, state, bot, config)
+    else:
+        await state.set_state(Dialog.waiting_first_message)
+        await first_message(message, state, bot, config)
+
+
 # ── Нетекстовые сообщения в любом состоянии диалога ──
 
 

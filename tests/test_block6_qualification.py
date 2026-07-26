@@ -32,6 +32,7 @@ class FakeMessage:
         self.text = text
         self.caption = caption
         self.content_type = content_type
+        self.chat = type("Chat", (), {"type": "private"})()
         self.sent: list[str] = []
 
     async def answer(self, text, **kwargs):
