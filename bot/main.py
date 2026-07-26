@@ -14,6 +14,7 @@ from aiohttp import web
 
 from bot.config import Config, load_config
 from bot.handlers import start
+from bot.services.ai import init_ai
 from bot.services.airtable import init_airtable
 from bot.services.knowledge import load_knowledge
 from bot.utils.logger import get_app_logger, setup_logging
@@ -60,6 +61,7 @@ def main() -> None:
     # дальше AI-сервис работает с кэшем через get_knowledge().
     load_knowledge(config.knowledge_dir)
     init_airtable(config)
+    init_ai(config)
 
     bot = Bot(
         token=config.telegram_bot_token,

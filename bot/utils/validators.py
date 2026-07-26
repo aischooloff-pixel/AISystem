@@ -1,0 +1,215 @@
+"""Валидация ответов AI (Блок 4, обязательная).
+
+Порядок из ТЗ: распарсить JSON → обязательные ключи → допустимость enum →
+confidence 0–100 → стоп-фразы в тексте ответа. Провал парсинга даёт один
+retry с уточнением формата (это делает ``services/ai.py``); окончательный
+провал — передача Юлии с пометкой «Ошибка обработки AI».
+
+Стоп-фразы проверяются по нормализованному тексту (нижний регистр, без
+пунктуации, схлопнутые пробелы) — иначе модель обходит проверку запятой
+или восклицательным знаком.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import unicodedata
+
+# Запрещённые фразы: «Работа AI с сомнениями клиента v1.0» (8) +
+# «FAQ бренда» / ТЗ Блок 4 (дополнительные). Дословно из документов.
+STOP_PHRASES: tuple[str, ...] = (
+    # «Работа AI с сомнениями клиента v1.0»
+    "Если не купите сейчас — ничего не изменится",
+    "У вас точно родовая программа",
+    "Вам срочно нужна диагностика",
+    "Я знаю причину вашей проблемы",
+    "Это единственный способ решить ситуацию",
+    "Без моей помощи вы не справитесь",
+    "После работы всё обязательно изменится",
+    "Вы сами виноваты",
+    # «FAQ бренда» (запрещённые ответы AI, ТЗ Блок 2/4)
+    "После диагностики всё изменится",
+    "Вам обязательно нужна эта услуга",
+    "Я гарантирую результат",
+    "Это точно родовая проблема",
+    "Вам поможет только этот метод",
+    # «Принципы продаж», п. 6 и «Продуктовая линейка»: недопустимая формулировка
+    "Вам обязательно нужна диагностика",
+)
+
+
+def _normalize(text: str) -> str:
+    """Нижний регистр, без пунктуации и «ё», один пробел между словами."""
+    text = unicodedata.normalize("NFKC", text).lower().replace("ё", "е")
+    text = re.sub(r"[^\w\s]", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+_NORMALIZED_STOP = tuple((phrase, _normalize(phrase)) for phrase in STOP_PHRASES)
+
+
+def find_stop_phrase(text: str | None) -> str | None:
+    """Первая запрещённая фраза в тексте (после нормализации) или ``None``."""
+    if not text or not isinstance(text, str):
+        # Не-строка от модели — дело схемной валидации; здесь не падаем
+        return None
+    normalized = _normalize(text)
+    for phrase, normalized_phrase in _NORMALIZED_STOP:
+        if normalized_phrase in normalized:
+            return phrase
+    return None
+
+
+def sanitize_user_text(text: str) -> str:
+    """Готовит пользовательский текст к вставке в промпт.
+
+    Текст вставляется в блок, ограждённый тройными кавычками — последовательность
+    из трёх и более кавычек внутри текста закрыла бы разделитель, и остаток
+    сообщения встал бы в промпте в позицию инструкции (prompt injection).
+    Схлопываем такие последовательности до одной кавычки.
+    """
+    if not isinstance(text, str):
+        return ""
+    return re.sub(r'["\'`]{3,}', '"', text)
+
+
+def parse_ai_json(raw: str | None) -> dict | None:
+    """JSON из ответа модели. Терпит обёртку в ```-блок; ``None`` — не парсится."""
+    if not raw:
+        return None
+    text = raw.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-zA-Z]*\s*|\s*```$", "", text).strip()
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+# ── Схемы трёх функций AI (ТЗ, Блок 4) ──
+
+LEVELS = {"high", "medium", "low"}
+STATUSES = {"hot", "warm", "cold", "non_target"}
+SCENARIOS = {"A_ready", "B_problem", "C_info"}
+EMOTIONS = {"positive", "neutral", "negative", "interested"}
+PRODUCT_INTERESTS = {
+    "diagnostics",
+    "session",
+    "constellation",
+    "business_constellation",
+    "strategic",
+    "support",
+    "b2b",
+    "education",
+    "unknown",
+}
+
+
+def _check_confidence(data: dict, problems: list[str]) -> None:
+    value = data.get("confidence")
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        problems.append(f"confidence: не число ({value!r})")
+    elif not 0 <= value <= 100:
+        problems.append(f"confidence: вне диапазона 0–100 ({value!r})")
+
+
+def _check_enum(data: dict, key: str, allowed: set[str], problems: list[str]) -> None:
+    value = data.get(key)
+    if value not in allowed:
+        problems.append(f"{key}: недопустимое значение {value!r}")
+
+
+def _check_required(data: dict, keys: tuple[str, ...], problems: list[str]) -> None:
+    for key in keys:
+        if key not in data:
+            problems.append(f"нет обязательного ключа: {key}")
+
+
+def validate_scenario(data: dict) -> list[str]:
+    """Проблемы ответа функции «определение сценария»; пустой список — валидно."""
+    problems: list[str] = []
+    _check_required(data, ("scenario", "confidence", "reason"), problems)
+    if "scenario" in data:
+        _check_enum(data, "scenario", SCENARIOS, problems)
+    if "confidence" in data:
+        _check_confidence(data, problems)
+    return problems
+
+
+QUALIFICATION_REQUIRED = (
+    "summary",
+    "key_phrases",
+    "status",
+    "status_reason",
+    "awareness",
+    "readiness",
+    "urgency",
+    "confidence",
+    "next_action",
+    "needs_yulia",
+    "needs_yulia_reason",
+    "product_interest",
+    "interests",
+    "bot_response",
+)
+
+
+def validate_qualification(data: dict) -> list[str]:
+    """Проблемы ответа функции «квалификация»; пустой список — валидно."""
+    problems: list[str] = []
+    _check_required(data, QUALIFICATION_REQUIRED, problems)
+    if "status" in data:
+        _check_enum(data, "status", STATUSES, problems)
+    for axis in ("awareness", "readiness", "urgency"):
+        if axis in data:
+            _check_enum(data, axis, LEVELS, problems)
+    if "product_interest" in data:
+        _check_enum(data, "product_interest", PRODUCT_INTERESTS, problems)
+    if "confidence" in data:
+        _check_confidence(data, problems)
+    if "needs_yulia" in data and not isinstance(data["needs_yulia"], bool):
+        problems.append(f"needs_yulia: не булево ({data['needs_yulia']!r})")
+    for list_key in ("key_phrases", "interests"):
+        if list_key in data and not isinstance(data[list_key], list):
+            problems.append(f"{list_key}: не список ({data[list_key]!r})")
+    if "bot_response" in data and not isinstance(data["bot_response"], str):
+        problems.append("bot_response: не строка")
+    return problems
+
+
+COMMENT_REQUIRED = (
+    "topic",
+    "emotion",
+    "key_problem",
+    "interest_level",
+    "is_potential_client",
+    "needs_reply",
+    "request_detected",
+    "suggested_reply",
+    "should_invite_to_bot",
+    "confidence",
+)
+
+
+def validate_comment_analysis(data: dict) -> list[str]:
+    """Проблемы ответа функции «анализ комментария»; пустой список — валидно."""
+    problems: list[str] = []
+    _check_required(data, COMMENT_REQUIRED, problems)
+    if "emotion" in data:
+        _check_enum(data, "emotion", EMOTIONS, problems)
+    level = data.get("interest_level")
+    if "interest_level" in data and (
+        not isinstance(level, int) or isinstance(level, bool) or not 1 <= level <= 5
+    ):
+        problems.append(f"interest_level: не целое 1–5 ({level!r})")
+    if "confidence" in data:
+        _check_confidence(data, problems)
+    for flag in ("is_potential_client", "needs_reply", "should_invite_to_bot"):
+        if flag in data and not isinstance(data[flag], bool):
+            problems.append(f"{flag}: не булево ({data[flag]!r})")
+    # suggested_reply уходит в find_stop_phrase и в карточку Юлии — только строка
+    if "suggested_reply" in data and not isinstance(data["suggested_reply"], str):
+        problems.append(f"suggested_reply: не строка ({data['suggested_reply']!r})")
+    return problems
