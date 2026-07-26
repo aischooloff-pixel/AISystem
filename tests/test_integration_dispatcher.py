@@ -17,7 +17,7 @@ from aiogram.methods import SendMessage, TelegramMethod
 from aiogram.types import Chat, Message, Update, User
 
 from bot import texts
-from bot.main import create_dispatcher
+
 from bot.services import ai as ai_module
 from tests.test_block6_qualification import CRM, FakeAI, config  # noqa: F401
 

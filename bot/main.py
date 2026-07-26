@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import hashlib
+
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage, SimpleEventIsolation
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
@@ -42,11 +44,28 @@ def create_dispatcher(config: Config | None = None) -> Dispatcher:
     return dispatcher
 
 
+def webhook_secret_for(config: Config) -> str:
+    """Секрет вебхука: из конфига или детерминированно из токена бота.
+
+    Telegram присылает его в заголовке X-Telegram-Bot-Api-Secret-Token
+    каждого апдейта — POST на /webhook от посторонних (без секрета)
+    отбрасываются aiogram'ом. Иначе любой, узнавший URL, мог бы слать
+    поддельные апдейты, включая «команды Юлии».
+    """
+    if config.webhook_secret:
+        return config.webhook_secret
+    return hashlib.sha256(config.telegram_bot_token.encode()).hexdigest()[:32]
+
+
 async def on_startup(bot: Bot, config: Config) -> None:
     """Устанавливает webhook. Без вебхука бот не получает сообщений —
     при неудаче падаем, systemd перезапустит через 10 секунд."""
     try:
-        await bot.set_webhook(config.webhook_full_url, drop_pending_updates=False)
+        await bot.set_webhook(
+            config.webhook_full_url,
+            drop_pending_updates=False,
+            secret_token=webhook_secret_for(config),
+        )
         logger.info("Webhook установлен: %s", config.webhook_full_url)
     except Exception:
         logger.exception("Не удалось установить webhook — останавливаемся")
@@ -57,6 +76,15 @@ async def on_shutdown(bot: Bot) -> None:
     """Останавливает бота. Webhook намеренно не снимаем: Telegram хранит
     недоставленные апдейты и дошлёт их после рестарта — сообщения клиентов
     не теряются при перезапуске."""
+    from bot.services import ai as ai_service
+    from bot.services import airtable as airtable_service
+
+    for closer in (ai_service._service, airtable_service._client):
+        if closer is not None:
+            try:
+                await closer.close()
+            except Exception:
+                logger.exception("Ошибка закрытия HTTP-клиента при остановке")
     await bot.session.close()
     logger.info("Бот остановлен")
 
@@ -79,7 +107,9 @@ def build_app(config: Config, bot: Bot) -> web.Application:
     dispatcher.shutdown.register(on_shutdown)
 
     app = web.Application()
-    SimpleRequestHandler(dispatcher=dispatcher, bot=bot).register(app, path=config.webhook_path)
+    SimpleRequestHandler(
+        dispatcher=dispatcher, bot=bot, secret_token=webhook_secret_for(config)
+    ).register(app, path=config.webhook_path)
     setup_application(app, dispatcher, bot=bot)
     return app
 

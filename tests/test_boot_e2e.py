@@ -135,13 +135,17 @@ async def running_app(monkeypatch):
     from bot.services.airtable import init_airtable
     from bot.services.knowledge import load_knowledge
 
+    from bot.main import webhook_secret_for
+
     load_knowledge(config.knowledge_dir)
     init_airtable(config)
     init_ai(config)
     dispatcher = get_shared_dispatcher(config)
 
     app = web.Application()
-    SimpleRequestHandler(dispatcher=dispatcher, bot=bot).register(app, path=config.webhook_path)
+    SimpleRequestHandler(
+        dispatcher=dispatcher, bot=bot, secret_token=webhook_secret_for(config)
+    ).register(app, path=config.webhook_path)
     setup_application(app, dispatcher, bot=bot)
 
     client = TestClient(TestServer(app))
@@ -175,7 +179,18 @@ async def test_webhook_start_flow_end_to_end(running_app):
             "text": "/start site",
         },
     }
-    response = await client.post(config.webhook_path, json=update)
+    from bot.main import webhook_secret_for
+
+    # Без секретного заголовка Telegram запрос отклоняется (защита webhook)
+    forged = await client.post(config.webhook_path, json=update)
+    assert forged.status == 401
+    assert backends.telegram_calls == []
+
+    response = await client.post(
+        config.webhook_path,
+        json=update,
+        headers={"X-Telegram-Bot-Api-Secret-Token": webhook_secret_for(config)},
+    )
     assert response.status == 200
     await wait_until(lambda: any(m == "sendMessage" for m, _ in backends.telegram_calls))
 
@@ -205,9 +220,12 @@ async def test_webhook_repeat_start_no_duplicate(running_app):
             "text": "/start referral",
         },
     }
+    from bot.main import webhook_secret_for
+
+    headers = {"X-Telegram-Bot-Api-Secret-Token": webhook_secret_for(config)}
     for update_id, expected_sends in ((2, 1), (3, 2)):
         update["update_id"] = update_id
-        response = await client.post(config.webhook_path, json=update)
+        response = await client.post(config.webhook_path, json=update, headers=headers)
         assert response.status == 200
         await wait_until(
             lambda: sum(1 for m, _ in backends.telegram_calls if m == "sendMessage")

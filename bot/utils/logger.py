@@ -49,8 +49,13 @@ def setup_logging(log_dir: Path, log_level: str = "INFO") -> None:
     """
     log_dir.mkdir(parents=True, exist_ok=True)
 
+    # Опечатка в LOG_LEVEL не должна ронять бота сырым ValueError на старте
+    level = getattr(logging, str(log_level).strip().upper(), None)
+    if not isinstance(level, int):
+        level = logging.INFO
+
     app_logger = logging.getLogger(APP_LOGGER_NAME)
-    app_logger.setLevel(log_level.upper())
+    app_logger.setLevel(level)
     for handler in app_logger.handlers[:]:
         handler.close()
         app_logger.removeHandler(handler)
@@ -68,6 +73,9 @@ def setup_logging(log_dir: Path, log_level: str = "INFO") -> None:
         decisions_logger.removeHandler(handler)
     decisions_logger.addHandler(_make_file_handler(log_dir / "ai_decisions.log", _DECISIONS_FORMAT))
     decisions_logger.propagate = False
+
+    if not isinstance(getattr(logging, str(log_level).strip().upper(), None), int):
+        app_logger.warning("Некорректный LOG_LEVEL=%r — использую INFO", log_level)
 
 
 def get_app_logger() -> logging.Logger:

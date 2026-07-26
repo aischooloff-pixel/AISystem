@@ -27,6 +27,9 @@ class Config(BaseSettings):
     telegram_discussion_group_id: int  # ID linked group, куда падают комментарии
     webhook_url: str  # публичный базовый URL сервера, без пути
     webhook_path: str = "/webhook"
+    # Секрет вебхука: Telegram шлёт его в заголовке каждого апдейта, чужие
+    # POST на /webhook отбрасываются. Пусто — выводится из токена бота.
+    webhook_secret: str | None = None
     webapp_host: str = "0.0.0.0"
     webapp_port: int = 8080
 

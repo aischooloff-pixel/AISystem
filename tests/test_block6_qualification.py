@@ -20,7 +20,7 @@ from bot import texts
 from bot.config import Config
 from bot.handlers import qualification as qual
 from bot.services import ai as ai_module
-from bot.services import airtable, notifier
+from bot.services import airtable
 from bot.states import Dialog
 
 TID = 777001

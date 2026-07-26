@@ -58,7 +58,13 @@ def build_report(data: dict) -> str:
     """Текст отчёта из сырых данных get_report_data. Чистая функция (тесты)."""
     date_from = date.fromisoformat(data["date_from"])
     date_to = date.fromisoformat(data["date_to"])
-    period = f"{date_from.day}–{date_to.day} {MONTHS_RU[date_to.month]}"
+    if date_from.month == date_to.month:
+        period = f"{date_from.day}–{date_to.day} {MONTHS_RU[date_to.month]}"
+    else:  # неделя на стыке месяцев: «27 июля – 2 августа»
+        period = (
+            f"{date_from.day} {MONTHS_RU[date_from.month]} – "
+            f"{date_to.day} {MONTHS_RU[date_to.month]}"
+        )
 
     new_contacts = _fields(data["new_contacts"])
     handoffs = _fields(data["handoffs"])
@@ -112,11 +118,15 @@ def build_report(data: dict) -> str:
         )
 
     # ── AI ──
+    # confidence=0 («Ошибка обработки AI») — самый тревожный случай:
+    # он должен входить в среднее и в счётчик передач по низкой уверенности
     confidences = [
-        c.get("ai_confidence") for c in new_contacts + handoffs if c.get("ai_confidence")
+        c["ai_confidence"] for c in new_contacts + handoffs if c.get("ai_confidence") is not None
     ]
     avg_confidence = f"{round(sum(confidences) / len(confidences))}%" if confidences else "—"
-    low_confidence_handoffs = sum(1 for c in handoffs if (c.get("ai_confidence") or 100) < 85)
+    low_confidence_handoffs = sum(
+        1 for c in handoffs if c.get("ai_confidence") is not None and c["ai_confidence"] < 85
+    )
 
     # ── Клиенты (текущая база) ──
     def count(status: str) -> int:

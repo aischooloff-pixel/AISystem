@@ -43,7 +43,7 @@ bot/
   keyboards/ utils/  # клавиатуры, валидаторы (стоп-фразы!), логгер
 scripts/             # setup_airtable --check, check_timeouts (cron),
                      # weekly_report (cron), backup.sh (cron), notify_backup
-tests/               # 179 тестов, включая 15 контрольных сценариев
+tests/               # 200 тестов, включая 15 контрольных сценариев
                      # (RESULTS.md)
 docs/                # USER_GUIDE (для Юлии), SETUP (деплой), RECOVERY
 logs.txt             # рабочий журнал разработки (НЕ логи приложения)

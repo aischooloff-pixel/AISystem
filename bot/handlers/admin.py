@@ -5,9 +5,9 @@
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 
-from aiogram import Bot, F, Router
+from aiogram import F, Router
 from aiogram.filters import BaseFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
@@ -54,7 +54,7 @@ HELP = (
     "/stop {id} — завершить взаимодействие\n"
     "/note {id} {текст} — заметка\n"
     "/stats — статистика · /tasks — задачи · /hot — горячие\n"
-    "/reload_knowledge — перечитать базу знаний\n"
+    "/reload_knowledge — перечитать базу знаний\n/cancel — отменить правку ответа на комментарий\n"
     "/health — проверка систем"
 )
 

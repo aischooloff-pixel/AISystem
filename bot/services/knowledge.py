@@ -28,9 +28,16 @@ _cache_dir: Path | None = None
 
 
 def _knowledge_dir(knowledge_dir: Path | str | None = None) -> Path:
-    """Каталог базы знаний: аргумент → переменная окружения → bot/knowledge."""
+    """Каталог базы знаний: аргумент → каталог первой загрузки → env → дефолт.
+
+    Кэш-каталог в приоритете над env: pydantic-settings читает .env только
+    в Config и НЕ экспортирует в os.environ — без этого get_knowledge() без
+    аргумента молча подменял бы нестандартный KNOWLEDGE_DIR дефолтным.
+    """
     if knowledge_dir is not None:
         return Path(knowledge_dir)
+    if _cache_dir is not None:
+        return _cache_dir
     return Path(os.environ.get("KNOWLEDGE_DIR", _DEFAULT_DIR))
 
 

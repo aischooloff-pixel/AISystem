@@ -22,6 +22,7 @@ from bot import texts
 from bot.config import Config
 from bot.services import airtable
 from bot.services.notifier import notify_yulia
+from bot.utils.helpers import automation_stopped
 from bot.utils.logger import get_app_logger
 
 logger = get_app_logger()
@@ -53,7 +54,7 @@ class PauseCheckMiddleware(BaseMiddleware):
             # (хендлеры сами защищаются от сбоев)
             return await handler(event, data)
         fields = contact.get("fields", {})
-        if not (fields.get("paused") or fields.get("assigned_to") == "yulia"):
+        if not automation_stopped(fields):
             return await handler(event, data)
 
         # Клиент у Юлии: сообщение не теряется, AI не отвечает

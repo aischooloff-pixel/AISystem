@@ -133,23 +133,27 @@ async def process_cold(cold_hours: int) -> int:
         return 0
     changed = 0
     for record in stale:
-        fields = record.get("fields", {})
-        if fields.get("result") == "no_response":
-            continue
-        if fields.get("status") in ("non_target", "client", "in_progress"):
-            continue
-        if fields.get("qualification_completed"):
-            continue
-        if status_locked_by_yulia(fields):
-            continue  # решение Юлии автоматика не переопределяет
-        old_status = fields.get("status", "cold")
-        if old_status != "cold":
-            await airtable.add_status_change(
-                record["id"], old_status, "cold", f"Нет ответа {cold_hours} ч", "ai"
-            )
-        await airtable.update_contact(record["id"], {"result": "no_response", "paused": True})
-        changed += 1
-        logger.info("Контакт telegram_id=%s → cold/no_response", _tid(record))
+        # Одна битая запись не должна блокировать обработку остальных
+        try:
+            fields = record.get("fields", {})
+            if fields.get("result") == "no_response":
+                continue
+            if fields.get("status") in ("non_target", "client", "in_progress"):
+                continue
+            if fields.get("qualification_completed"):
+                continue
+            if status_locked_by_yulia(fields):
+                continue  # решение Юлии автоматика не переопределяет
+            old_status = fields.get("status", "cold")
+            if old_status != "cold":
+                await airtable.add_status_change(
+                    record["id"], old_status, "cold", f"Нет ответа {cold_hours} ч", "ai"
+                )
+            await airtable.update_contact(record["id"], {"result": "no_response", "paused": True})
+            changed += 1
+            logger.info("Контакт telegram_id=%s → cold/no_response", _tid(record))
+        except Exception:
+            logger.exception("process_cold: ошибка на записи %s", record.get("id"))
     return changed
 
 

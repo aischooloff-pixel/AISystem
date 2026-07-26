@@ -63,7 +63,7 @@ PuTTY или Терминал, адрес и пароль — в передан�
 3. Установите зависимости:
 
        cd geikina-bot
-       python3 -m venv .venv
+       python3.11 -m venv .venv
        .venv/bin/pip install -r requirements.txt
 
 4. Верните настройки и базу знаний из бэкапа:

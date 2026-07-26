@@ -14,9 +14,12 @@ PYTHON="${PYTHON:-$PROJECT_DIR/.venv/bin/python}"
 DATE=$(date +%Y%m%d_%H%M%S)
 BACKUP_DIR="$BACKUP_ROOT/$DATE"
 
-# При любой ошибке — уведомление Юлии с текстом (ТЗ, Блок 10)
+# При любой ошибке — уведомление Юлии с текстом (ТЗ, Блок 10) и уборка
+# незавершённого каталога: в нём лежит копия .env, копить такие каталоги
+# в открытом виде нельзя, и ротация архивов их не удаляет.
 notify_fail() {
     cd "$PROJECT_DIR" && "$PYTHON" -m scripts.notify_backup --fail "шаг: $CURRENT_STEP" || true
+    rm -rf "$BACKUP_DIR" || true
 }
 trap notify_fail ERR
 CURRENT_STEP="подготовка"

@@ -143,7 +143,9 @@ async def _contact_for_dialog(message: Message) -> dict | None:
         await _reply_safe(message, texts.TECH_ERROR)
         return None
     fields = contact.get("fields", {})
-    if fields.get("paused") or fields.get("assigned_to") == "yulia":
+    from bot.utils.helpers import automation_stopped
+
+    if automation_stopped(fields):
         text = message.text or message.caption or f"<{message.content_type}>"
         await _append_history(contact, "client", text)
         await airtable.add_touch(

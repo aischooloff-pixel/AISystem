@@ -53,8 +53,42 @@
 · Прежние: FAQ v1.0; Блок 11; PAT Airtable + OPENAI_API_KEY для живого
   запуска. Получен тестовый TELEGRAM_BOT_TOKEN — проверка Telegram API.
 
+── ФИНАЛЬНЫЙ АУДИТ (22 агента: модули вне прошлых ревью, целостность
+   кода и документации, продакшн-готовность) ──
+16 подтверждённых находок, все исправлены:
+· КРИТИЧНО: webhook без secret_token — любой, узнавший URL, мог слать
+  поддельные апдейты → secret_token в set_webhook и SimpleRequestHandler
+  (из WEBHOOK_SECRET или детерминированно из токена), негативный e2e-тест
+  (POST без заголовка → 401);
+· get_knowledge() без аргумента подменял нестандартный KNOWLEDGE_DIR
+  дефолтным (env не наполняется из .env) → приоритет каталога первой
+  загрузки;
+· status_history с не-словарями в JSON ронял cron и хендлеры →
+  фильтрация в parse_status_history + per-record try/except в
+  process_cold;
+· статусы in_progress/client теперь реально останавливают автоматику
+  (automation_stopped) — сценарий 11 ТЗ и обещание USER_GUIDE;
+· backup.sh: notify_fail убирает незавершённый каталог с копией .env;
+· weekly_report: заголовок недели на стыке месяцев; confidence=0
+  учитывается в среднем и в «передачах по низкой уверенности»;
+· fmt_moment: date-only без фантомного времени и сдвига таймзоны;
+· LOG_LEVEL с опечаткой → INFO с предупреждением, а не ValueError;
+· setup_airtable: created_at/updated_at только date/dateTime
+  (computed-типы отвергали бы явную запись);
+· on_shutdown закрывает httpx-клиенты Airtable/AI;
+· докициклы: /cancel в HELP и USER_GUIDE, result=entered документирован
+  (ручная простановка Юлией), RECOVERY на python3.11, счётчики тестов.
+· E2E боевой сборки: build_app + локальные имитации Telegram/Airtable,
+  настоящий POST на /webhook (в т.ч. подделка без секрета → 401).
+· Живой вызов api.telegram.org из этого окружения невозможен (сетевая
+  политика прокси, CONNECT 403) — тестовый токен проверяется на деплое
+  по чек-листу SETUP.md, п. 8.
+· Итог: 200/200 тестов, pyflakes чист, black применён.
+
 ── СЛЕДУЮЩИЙ ШАГ ──
-Финальный аудит всего проекта + живые проверки с тестовым ботом.
+Деплой по SETUP.md (нужны OPENAI_API_KEY, PAT Airtable, VPS с HTTPS)
+и живой чек-лист. Из ТЗ не закрыты: faq.md (ждёт FAQ v1.0), Блок 11
+(ждёт подтверждения Юлии).
 
 ════════════════════════════════════════
 СЕССИЯ 5 · 2026-07-26

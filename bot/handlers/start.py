@@ -137,8 +137,10 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
 
     if existing is not None:
         fields = existing.get("fields", {})
-        # Шаг 3.1: передан Юлии или автоматика остановлена — не запускаемся
-        if fields.get("assigned_to") == "yulia" or fields.get("paused"):
+        # Шаг 3.1: передан Юлии, пауза или уже клиент — автоматика не запускается
+        from bot.utils.helpers import automation_stopped
+
+        if automation_stopped(fields):
             await airtable.add_touch(user.id, "dm_start", "Повторный /start (клиент у Юлии)")
             await _reply_safe(message, texts.ALREADY_WITH_YULIA)
             return
@@ -194,7 +196,9 @@ async def source_chosen(callback: CallbackQuery, state: FSMContext) -> None:
 
     if existing is not None:
         fields = existing.get("fields", {})
-        if fields.get("assigned_to") == "yulia" or fields.get("paused"):
+        from bot.utils.helpers import automation_stopped
+
+        if automation_stopped(fields):
             await _reply_message_of(callback, texts.ALREADY_WITH_YULIA)
             return
         # Контакт уже зарегистрирован (повторное нажатие / кнопка после

@@ -69,8 +69,10 @@ EXPECTED_SCHEMA: dict[str, dict[str, set[str]]] = {
         "qualification_completed": _CHECK,
         "handoff_date": _DATE,
         "notes": _LONG,
-        "created_at": _DATE | {"createdTime"},
-        "updated_at": _DATE | {"lastModifiedTime"},
+        # created_at/updated_at бот пишет ЯВНО: computed-типы
+        # (createdTime/lastModifiedTime) отвергли бы запись — только date/dateTime
+        "created_at": _DATE,
+        "updated_at": _DATE,
     },
     "Touches": {
         "contact_telegram_id": _NUM,
@@ -80,7 +82,7 @@ EXPECTED_SCHEMA: dict[str, dict[str, set[str]]] = {
         "source": _SELECT,
         "related_post": _TEXT,
         "raw_content": _LONG,
-        "created_at": _DATE | {"createdTime"},
+        "created_at": _DATE,
     },
     "Comments": {
         "author_telegram_id": _NUM,
@@ -101,7 +103,7 @@ EXPECTED_SCHEMA: dict[str, dict[str, set[str]]] = {
         "reply_status": _SELECT,
         "processed": _CHECK,
         "ai_confidence": _NUM,
-        "created_at": _DATE | {"createdTime"},
+        "created_at": _DATE,
     },
     "Posts": {
         "post_id": _TEXT,
@@ -117,7 +119,7 @@ EXPECTED_SCHEMA: dict[str, dict[str, set[str]]] = {
         "clicks_count": _NUM,
         "potential_clients_count": _NUM,
         "result": _LONG,
-        "created_at": _DATE | {"createdTime"},
+        "created_at": _DATE,
     },
     "Tasks": {
         "action": _TEXT,
@@ -128,7 +130,7 @@ EXPECTED_SCHEMA: dict[str, dict[str, set[str]]] = {
         "reason": _LONG,
         "created_by": _SELECT,
         "completed_at": _DATE,
-        "created_at": _DATE | {"createdTime"},
+        "created_at": _DATE,
     },
 }
 
