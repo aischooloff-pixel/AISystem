@@ -61,20 +61,18 @@ async def on_shutdown(bot: Bot) -> None:
     logger.info("Бот остановлен")
 
 
-def main() -> None:
-    """Собирает приложение и запускает webhook-сервер."""
-    config = load_config()
-    setup_logging(config.log_dir, config.log_level)
-    logger.info("Запуск бота (host=%s, port=%s)...", config.webapp_host, config.webapp_port)
+def build_app(config: Config, bot: Bot) -> web.Application:
+    """Собирает боевое приложение: сервисы, диспетчер, webhook-сервер.
+
+    Вынесено из ``main()`` без изменений логики, чтобы e2e-тест поднимал
+    ровно ту же сборку (с подменённым Telegram API-сервером).
+    """
     # База знаний читается на старте: состав и оценка токенов уходят в лог (ТЗ, Блок 2),
     # дальше AI-сервис работает с кэшем через get_knowledge().
     load_knowledge(config.knowledge_dir)
     init_airtable(config)
     init_ai(config)
 
-    # Без parse_mode: во всех текстах — обычный текст, а HTML-режим молча
-    # ронял бы доставку карточек с «<» в цитатах клиентов (TelegramBadRequest)
-    bot = Bot(token=config.telegram_bot_token)
     dispatcher = create_dispatcher(config)
     dispatcher["config"] = config
     dispatcher.startup.register(on_startup)
@@ -83,6 +81,18 @@ def main() -> None:
     app = web.Application()
     SimpleRequestHandler(dispatcher=dispatcher, bot=bot).register(app, path=config.webhook_path)
     setup_application(app, dispatcher, bot=bot)
+    return app
+
+
+def main() -> None:
+    """Точка входа: конфиг, логирование, приложение, webhook-сервер."""
+    config = load_config()
+    setup_logging(config.log_dir, config.log_level)
+    logger.info("Запуск бота (host=%s, port=%s)...", config.webapp_host, config.webapp_port)
+    # Без parse_mode: во всех текстах — обычный текст, а HTML-режим молча
+    # ронял бы доставку карточек с «<» в цитатах клиентов (TelegramBadRequest)
+    bot = Bot(token=config.telegram_bot_token)
+    app = build_app(config, bot)
     web.run_app(app, host=config.webapp_host, port=config.webapp_port)
 
 
