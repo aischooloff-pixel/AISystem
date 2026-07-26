@@ -1,0 +1,6 @@
+[tool.black]
+# ТЗ, Часть 7: black, длина строки 100
+line-length = 100
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

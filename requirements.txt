@@ -1,0 +1,9 @@
+# Рантайм (стек из ТЗ, Часть 2)
+aiogram>=3.15,<4
+pydantic-settings>=2.6,<3
+httpx>=0.27,<1
+
+# Разработка и тесты (ТЗ требует smoke-тест на каждый блок; black — Часть 7)
+pytest>=8
+pytest-asyncio>=0.24
+black>=24

@@ -1,0 +1,11 @@
+# Секреты
+.env
+
+# Логи приложения (рабочий журнал logs.txt — в git)
+logs/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/

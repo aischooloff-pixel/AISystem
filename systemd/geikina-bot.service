@@ -1,0 +1,18 @@
+# Юнит systemd для VPS (Ubuntu). Установка описана в docs/SETUP.md (Блок 13).
+# Требование ТЗ (Блок 1): Restart=always, RestartSec=10.
+[Unit]
+Description=Geikina digital sales bot (Telegram)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=yulia
+WorkingDirectory=/home/yulia/geikina-bot
+ExecStart=/home/yulia/geikina-bot/.venv/bin/python -m bot.main
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
