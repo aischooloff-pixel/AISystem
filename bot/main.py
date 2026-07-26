@@ -13,7 +13,8 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 from aiohttp import web
 
 from bot.config import Config, load_config
-from bot.handlers import qualification, start
+from bot.handlers import admin, callbacks, qualification, start
+from bot.middlewares.pause_check import PauseCheckMiddleware
 from bot.services.ai import init_ai
 from bot.services.airtable import init_airtable
 from bot.services.knowledge import load_knowledge
@@ -22,17 +23,22 @@ from bot.utils.logger import get_app_logger, setup_logging
 logger = get_app_logger()
 
 
-def create_dispatcher() -> Dispatcher:
-    """Создаёт Dispatcher и регистрирует роутеры.
+def create_dispatcher(config: Config | None = None) -> Dispatcher:
+    """Создаёт Dispatcher, регистрирует роутеры и middleware.
 
-    Middleware остановки автоматики (``pause_check``) добавится в Блоке 7,
-    роутеры квалификации, админки и комментариев — в Блоках 6–8.
+    Порядок роутеров важен: admin-команды раньше квалификации, чтобы
+    команды Юлии не попадали в FSM диалога. ``pause_check`` — outer
+    middleware, выполняется до всех хендлеров (ТЗ, Блок 7).
     """
     # events_isolation сериализует обработку апдейтов одного пользователя:
     # двойной тап по кнопке / два быстрых /start не выполняются параллельно
     # (вторая линия защиты от дублей вместе с замком в upsert_contact)
     dispatcher = Dispatcher(storage=MemoryStorage(), events_isolation=SimpleEventIsolation())
+    if config is not None:
+        dispatcher.message.outer_middleware(PauseCheckMiddleware(config))
     dispatcher.include_router(start.router)
+    dispatcher.include_router(admin.router)
+    dispatcher.include_router(callbacks.router)
     dispatcher.include_router(qualification.router)
     return dispatcher
 
@@ -71,7 +77,7 @@ def main() -> None:
         token=config.telegram_bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
-    dispatcher = create_dispatcher()
+    dispatcher = create_dispatcher(config)
     dispatcher["config"] = config
     dispatcher.startup.register(on_startup)
     dispatcher.shutdown.register(on_shutdown)

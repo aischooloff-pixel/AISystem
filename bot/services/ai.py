@@ -73,6 +73,19 @@ class AIService:
     async def close(self) -> None:
         await self._http.aclose()
 
+    async def ping(self) -> float | None:
+        """Доступность OpenAI для /health: задержка в мс или ``None``."""
+        import time
+
+        started = time.monotonic()
+        try:
+            response = await self._http.get("/models", params={"limit": 1})
+        except httpx.HTTPError:
+            return None
+        if response.status_code != 200:
+            return None
+        return (time.monotonic() - started) * 1000
+
     # ── низкий уровень: один вызов Chat Completions с retry по ТЗ ──
 
     async def _chat(self, messages: list[dict]) -> str | None:

@@ -95,6 +95,16 @@ class AirtableClient:
     async def close(self) -> None:
         await self._http.aclose()
 
+    async def ping(self) -> float | None:
+        """Доступность Airtable для /health: задержка в мс или ``None``."""
+        import time
+
+        started = time.monotonic()
+        result = await self._request("GET", self.contacts, params={"maxRecords": 1})
+        if result is None:
+            return None
+        return (time.monotonic() - started) * 1000
+
     # ── низкоуровневый запрос: rate limit + retry + логирование ──
 
     async def _request(
