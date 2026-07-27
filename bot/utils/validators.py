@@ -48,9 +48,52 @@ def _normalize(text: str) -> str:
 
 _NORMALIZED_STOP = tuple((phrase, _normalize(phrase)) for phrase in STOP_PHRASES)
 
+# Смысловые шаблоны — вторая линия к дословному списку.
+# Дословное сравнение ловит только цитату из документа, а модель, нарушившая
+# инструкцию промпта, скажет своими словами: «Я гарантирую ВАМ результат»,
+# «Вы сами В ЭТОМ виноваты». Шаблоны бьют по смыслу запрета, а не по фразе.
+# Ложное срабатывание здесь дёшево: лишняя передача Юлии — ровно то, что
+# предписывает принцип безопасности ТЗ («лучше лишняя передача человеку»).
+# Применяются к нормализованному тексту, поэтому без пунктуации и «ё».
+_STOP_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (
+        re.compile(r"гарантиру\w*(?:\s+\w+){0,3}\s+результат"),
+        "обещание гарантированного результата",
+    ),
+    (re.compile(r"\bвы\b(?:\s+\w+){0,2}\s+сам\w*(?:\s+\w+){0,2}\s+виноват"), "обвинение клиента"),
+    (
+        re.compile(r"без\s+(?:моей|нашей)\s+помощи(?:\s+\w+){0,3}\s+не\s+справ"),
+        "давление беспомощностью",
+    ),
+    (
+        re.compile(r"(?:точно|наверняка)\s+знаю(?:\s+\w+){0,2}\s+причин"),
+        "присвоение экспертного вывода",
+    ),
+    (
+        re.compile(
+            r"после\s+(?:диагностики|работы|встречи)(?:\s+\w+){0,4}\s+(?:все|всё)\s+изменит"
+        ),
+        "обещание изменений после работы",
+    ),
+    (
+        re.compile(r"единственн\w+\s+(?:способ|метод|путь|вариант)"),
+        "навязывание единственного пути",
+    ),
+    (
+        re.compile(
+            r"(?:обязательно|срочно)\s+нужн\w*(?:\s+\w+){0,2}\s+(?:диагностик|услуг|сессия)"
+        ),
+        "искусственная срочность",
+    ),
+)
+
 
 def find_stop_phrase(text: str | None) -> str | None:
-    """Первая запрещённая фраза в тексте (после нормализации) или ``None``."""
+    """Первая запрещённая фраза в тексте или ``None``.
+
+    Сначала дословный список (13 фраз ТЗ), затем смысловые шаблоны —
+    перефразированный запрет так же недопустим, как процитированный.
+    """
     if not text or not isinstance(text, str):
         # Не-строка от модели — дело схемной валидации; здесь не падаем
         return None
@@ -58,6 +101,9 @@ def find_stop_phrase(text: str | None) -> str | None:
     for phrase, normalized_phrase in _NORMALIZED_STOP:
         if normalized_phrase in normalized:
             return phrase
+    for pattern, label in _STOP_PATTERNS:
+        if pattern.search(normalized):
+            return label
     return None
 
 
@@ -223,9 +269,13 @@ def validate_comment_analysis(data: dict) -> list[str]:
     for flag in ("is_potential_client", "needs_reply", "should_invite_to_bot"):
         if flag in data and not isinstance(data[flag], bool):
             problems.append(f"{flag}: не булево ({data[flag]!r})")
-    # suggested_reply уходит в find_stop_phrase и в карточку Юлии — только строка
-    if "suggested_reply" in data and not isinstance(data["suggested_reply"], str):
-        problems.append(f"suggested_reply: не строка ({data['suggested_reply']!r})")
+    # suggested_reply уходит в find_stop_phrase и в карточку Юлии.
+    # null допустим: при needs_reply=false отвечать не на что, и модель честно
+    # возвращает пустоту. Потребители к этому готовы — «or '—'» в карточке,
+    # «or ''» при публикации. Отвергать такой ответ значило бы гнать на ручную
+    # передачу каждый комментарий, не требующий реакции.
+    if "suggested_reply" in data and not isinstance(data["suggested_reply"], (str, type(None))):
+        problems.append(f"suggested_reply: не строка и не null ({data['suggested_reply']!r})")
     return problems
 
 

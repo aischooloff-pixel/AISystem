@@ -240,6 +240,25 @@ class AIService:
         if data is None:
             return None
 
+        if (
+            data.get("status") == "warm"
+            and data.get("readiness") == "high"
+            and data.get("urgency") == "high"
+        ):
+            # «Правило смещения» (ТЗ, Блок 4): warm при высокой готовности и
+            # срочности → hot и передача. Требование детерминированное, поэтому
+            # проверяется кодом, а не только просьбой в промпте: модель может
+            # вернуть warm с двумя high, и тогда горячий клиент молча остался бы
+            # в прогреве. Применяется и к промежуточной квалификации — признаки
+            # уже налицо, ждать финального шага незачем.
+            logger.info("Правило смещения: warm + readiness/urgency=high → hot, передаю Юлии")
+            data["status"] = "hot"
+            data["needs_yulia"] = True
+            if not data.get("needs_yulia_reason"):
+                data["needs_yulia_reason"] = (
+                    "Правило смещения: признаки warm при высокой готовности и срочности"
+                )
+
         if final and data["confidence"] < self.confidence_threshold:
             # Порог 85% из «Критериев квалификации», п. 9: ниже — решает Юлия.
             # Пометка «Требуется экспертная оценка» обязательна ВСЕГДА (ТЗ);

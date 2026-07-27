@@ -18,7 +18,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot, F, Router
 from aiogram.filters import StateFilter
@@ -193,7 +193,7 @@ def _log_decision(fields: dict, qualification: dict, response_sent: str) -> None
     )
 
 
-async def _store_qualification(contact: dict, qualification: dict) -> None:
+async def _store_qualification(contact: dict, qualification: dict, review_days: int) -> None:
     """Результаты квалификации → Contacts (для warm/cold, без передачи)."""
     updates = {
         "qualification_completed": True,
@@ -203,6 +203,13 @@ async def _store_qualification(contact: dict, qualification: dict) -> None:
         "ai_confidence": int(qualification.get("confidence") or 0),
         "next_step": (qualification.get("next_action") or "")[:200],
     }
+    if updates["next_step"]:
+        # Шаг без срока не попадёт ни в один фильтр Юлии. Горизонт берём тот же,
+        # на котором check_timeouts решает судьбу тёплого клиента, — так
+        # «следующее действие» и напоминание смотрят в одну дату.
+        updates["next_action_date"] = (
+            datetime.now(timezone.utc) + timedelta(days=review_days)
+        ).isoformat(timespec="seconds")
     for axis in ("awareness", "readiness", "urgency"):
         if qualification.get(axis):
             updates[axis] = qualification[axis]
@@ -262,7 +269,7 @@ async def _finish(
             await airtable.add_status_change(
                 contact["id"], old_status, status, qualification.get("status_reason") or "", "ai"
             )
-    await _store_qualification(contact, qualification)
+    await _store_qualification(contact, qualification, config.nurturing_review_days)
     await airtable.add_touch(
         int(fields.get("telegram_id") or 0),
         "qualified",

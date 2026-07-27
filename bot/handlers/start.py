@@ -94,7 +94,12 @@ async def _remove_keyboard_safe(callback: CallbackQuery) -> None:
 
 
 async def _register_and_greet(
-    message: Message, state: FSMContext, user: User, source: str, source_detail: str | None
+    message: Message,
+    state: FSMContext,
+    user: User,
+    source: str,
+    source_detail: str | None,
+    utm: str | None = None,
 ) -> None:
     """Шаги 4.3–4.6: создание контакта, касание, приветствие, FSM."""
     data = {
@@ -104,6 +109,8 @@ async def _register_and_greet(
     }
     if source_detail:
         data["source_detail"] = source_detail
+    if utm:
+        data["utm"] = utm
     record = await airtable.upsert_contact(user.id, data)
     if record is None:
         # Airtable недоступен: клиента не теряем — диалог продолжается,
@@ -122,10 +129,21 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
     user = message.from_user
     if user is None:
         return
-    # Deep link: /start <параметр> (aiogram передаёт текст целиком)
+    # Deep link: /start <параметр> (aiogram передаёт текст целиком).
+    # Формат «источник__метка»: ТЗ (Часть 3) требует фиксировать UTM-метку
+    # при первом касании, а Telegram разрешает в параметре только
+    # [A-Za-z0-9_-], поэтому разделитель — двойное подчёркивание.
     parts = (message.text or "").split(maxsplit=1)
     param = parts[1].strip() if len(parts) > 1 else ""
-    logger.info("Входящее /start от telegram_id=%s, параметр=%r", user.id, param)
+    source_param, _, utm = param.partition("__")
+    utm = utm or None
+    logger.info(
+        "Входящее /start от telegram_id=%s, параметр=%r (источник=%r, utm=%r)",
+        user.id,
+        param,
+        source_param,
+        utm,
+    )
 
     ok, existing = await airtable.find_contact_checked(user.id)
     if not ok:
@@ -156,14 +174,20 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
         return
 
     # Новый контакт (или Airtable не ответил — upsert внутри перепроверит)
-    if param in VALID_SOURCES:
-        await _register_and_greet(message, state, user, param, f"deep link: {param}")
+    if source_param in VALID_SOURCES:
+        await _register_and_greet(
+            message, state, user, source_param, f"deep link: {param}", utm=utm
+        )
         return
-    # Шаг 4.2: источник не определён — кнопки выбора
+    # Шаг 4.2: источник не определён — кнопки выбора.
+    # Метку из нераспознанного параметра не теряем: донесём её до записи
+    # через FSM, когда клиент выберет источник кнопкой.
     detail = f"нераспознанный start-параметр: {param}" if param else None
     await state.set_state(Dialog.choosing_source)
     if detail:
         await state.update_data(source_detail=detail)
+    if utm:
+        await state.update_data(utm=utm)
     await _reply_safe(message, texts.SOURCE_QUESTION, reply_markup=source_keyboard())
 
 
@@ -217,7 +241,9 @@ async def source_chosen(callback: CallbackQuery, state: FSMContext) -> None:
     if extra:
         detail = f"{detail}; {extra}" if detail else extra
     if callback.message is not None:
-        await _register_and_greet(callback.message, state, user, source, detail)
+        await _register_and_greet(
+            callback.message, state, user, source, detail, utm=state_data.get("utm")
+        )
     else:
         logger.error("callback без message: приветствие не отправлено (id=%s)", user.id)
 
