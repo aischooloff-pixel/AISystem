@@ -40,10 +40,11 @@
 ## 4. Airtable
 
 1. [airtable.com](https://airtable.com) → аккаунт бренда.
-2. Создайте базу с 5 таблицами: **Contacts, Touches, Comments, Posts,
-   Tasks** — все поля перечислены в модели данных (ТЗ, Часть 3) и
-   проверяются скриптом (шаг 6). Быстрый путь: скопировать структуру
-   из тестовой базы (Иван передаст ссылку-шаблон).
+2. Создайте базу с 6 таблицами: **Contacts, Touches, Comments, Posts,
+   Tasks, Diagnostics** — все поля перечислены в модели данных
+   (ТЗ, Часть 3; Diagnostics — Блок 11) и проверяются скриптом (шаг 6).
+   Быстрый путь: скопировать структуру из рабочей базы
+   (Иван передаст ссылку-шаблон).
 3. [airtable.com/create/tokens](https://airtable.com/create/tokens) →
    Personal Access Token со scopes `data.records:read`,
    `data.records:write`, `schema.bases:read` и доступом к этой базе →
@@ -51,6 +52,11 @@
 4. ID базы (`appXXXXXXXXXXXXXX`) — из URL базы → `AIRTABLE_BASE_ID`.
 
 ## 5. VPS (Ubuntu 22.04+)
+
+**Локация — не Россия.** OpenAI отклоняет запросы с российских IP, бот
+с такого сервера не сможет квалифицировать лиды. Берите ЕС (Германия,
+Нидерланды, Финляндия). Нагрузка минимальная: 1 vCPU / 1 ГБ RAM хватает,
+БД на сервере нет — Airtable внешний.
 
 ```bash
 sudo apt update && sudo apt install -y python3.11 python3.11-venv git nginx certbot python3-certbot-nginx
