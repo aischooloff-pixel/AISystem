@@ -27,14 +27,23 @@ KNOWLEDGE_DIR = Path(__file__).resolve().parent.parent / "bot" / "knowledge"
 
 # Все 8 файлов из структуры проекта (ТЗ, Часть 4)
 EXPECTED_FILES = [
+    # Порядок алфавитный — в нём же get_knowledge() склеивает файлы.
+    # Восемь исходных (ТЗ, Блок 2) и шесть из пакета заказчика 2026-07-27,
+    # каждый из которых прямо адресован AI-помощнику.
     "brand.md",
+    "brand_architecture.md",
+    "cases.md",
     "communication.md",
+    "content.md",
     "faq.md",
+    "glossary.md",
     "objections.md",
     "products.md",
     "qualification.md",
+    "routes.md",
     "stop_topics.md",
     "templates.md",
+    "tone_of_voice.md",
 ]
 
 
@@ -49,7 +58,7 @@ def _reset_cache():
 
 
 def test_all_eight_files_exist_and_not_empty() -> None:
-    """Критерий: все 8 .md созданы."""
+    """Критерий ТЗ: все 8 .md созданы; плюс документы пакета 2026-07-27."""
     for name in EXPECTED_FILES:
         path = KNOWLEDGE_DIR / name
         assert path.is_file(), f"нет файла базы знаний: {name}"

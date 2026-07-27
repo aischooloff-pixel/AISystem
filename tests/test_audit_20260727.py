@@ -150,17 +150,62 @@ def test_faq_contains_all_nine_sections() -> None:
 
 
 def test_faq_contains_answers_not_only_questions() -> None:
-    """Ключевые факты из документа — именно ответы, а не перечень тем."""
+    """Ключевые факты из документа — именно ответы, а не перечень тем.
+
+    Формулировки взяты из редакции FAQ, присланной 2026-07-27 (девять файлов
+    «Раздел N»); прежняя редакция из PDF была короче и с другими разделами.
+    """
     faq = re.sub(r"\s+", " ", (KNOWLEDGE_DIR / "faq.md").read_text(encoding="utf-8"))
     for fact in (
-        "До 60 минут",  # сколько длится диагностика
-        "отделение фактов от интерпретаций",  # отличие от консультации
-        "До начала встречи",  # когда оплата
-        "Возврат регулируется условиями договора",
-        "Программы обучения находятся в разработке",
-        "все важные экспертные решения принимает Юлия",
+        "продолжительностью до 60 минут",  # сколько длится диагностика
+        "отделить факты от интерпретаций",  # суть подхода
+        "Более 15 лет",  # опыт Юлии
+        "не рассчитывает стоимость самостоятельно",  # правило про цены
+        "формате онлайн",  # как проходит работа
     ):
         assert fact.lower() in faq.lower(), f"в faq.md нет ответа: {fact!r}"
+
+
+# ── Пакет документов заказчика от 2026-07-27 ──
+
+
+def test_faq_has_nine_sections_of_the_new_edition() -> None:
+    """Присланная 2026-07-27 редакция FAQ — другая, чем прежняя из PDF:
+    девять разделов с иными заголовками и в семь раз больший объём.
+    """
+    faq = (KNOWLEDGE_DIR / "faq.md").read_text(encoding="utf-8")
+    titles = re.findall(r"^## Раздел \d+\. (.+)$", faq, re.M)
+    assert len(titles) == 9, f"разделов не девять: {titles}"
+    assert titles[0].startswith("Кто такая Юлия"), titles[0]
+    assert "не подойти" in titles[6], titles[6]
+    assert len(faq) > 40_000, "FAQ подозрительно короткий — вероятно, обрезан"
+
+
+@pytest.mark.parametrize(
+    "filename,marker",
+    [
+        ("tone_of_voice.md", "Tone of Voice"),
+        ("glossary.md", "Системная диагностика"),
+        ("cases.md", "Кейс 1"),
+        ("routes.md", "AI не продаёт услуги"),
+        ("content.md", "публикации Telegram"),
+        ("brand_architecture.md", "Конституция бренда"),
+    ],
+)
+def test_new_knowledge_documents_transferred(filename: str, marker: str) -> None:
+    """Каждый документ пакета на месте и содержит опорную формулировку."""
+    path = KNOWLEDGE_DIR / filename
+    assert path.is_file(), f"нет файла: {filename}"
+    text = path.read_text(encoding="utf-8")
+    assert len(text) > 3_000, f"{filename} подозрительно короткий: {len(text)}"
+    assert marker in text, f"в {filename} нет опорной формулировки {marker!r}"
+
+
+def test_cases_carry_the_no_analogy_warning() -> None:
+    """Кейсы нельзя предъявлять как доказательство: похожие запросы имеют
+    разные механизмы. Требование самого документа — теряться не должно."""
+    cases = re.sub(r"\s+", " ", (KNOWLEDGE_DIR / "cases.md").read_text(encoding="utf-8"))
+    assert "не используется" in cases and "доказательств" in cases
 
 
 # ── Находка 5: вопросы анкеты дословно ──
