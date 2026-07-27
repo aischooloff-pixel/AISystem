@@ -47,6 +47,8 @@ class Config(BaseSettings):
     airtable_comments_table: str = "Comments"
     airtable_posts_table: str = "Posts"
     airtable_tasks_table: str = "Tasks"
+    # Блок 11 (анкета «Точка сбоя») включён в Спринт 1 — подтверждение Юлии 2026-07-27
+    airtable_diagnostics_table: str = "Diagnostics"
 
     # ── Логика ──
     # Порог 85% из документа «Критерии квалификации», п. 9 —

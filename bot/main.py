@@ -13,7 +13,7 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 from aiohttp import web
 
 from bot.config import Config, load_config
-from bot.handlers import admin, callbacks, comments, qualification, start
+from bot.handlers import admin, callbacks, comments, qualification, questionnaire, start
 from bot.middlewares.pause_check import PauseCheckMiddleware
 from bot.services.ai import init_ai
 from bot.services.airtable import init_airtable
@@ -40,6 +40,9 @@ def create_dispatcher(config: Config | None = None) -> Dispatcher:
     dispatcher.include_router(start.router)
     dispatcher.include_router(admin.router)
     dispatcher.include_router(callbacks.router)
+    # Анкета — до квалификации: её состояния свои (Questionnaire.*), но
+    # catch-all квалификации не должен получать ответы анкеты раньше неё
+    dispatcher.include_router(questionnaire.router)
     dispatcher.include_router(qualification.router)
     return dispatcher
 

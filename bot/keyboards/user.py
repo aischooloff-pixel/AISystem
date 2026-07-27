@@ -30,3 +30,19 @@ def source_keyboard() -> InlineKeyboardMarkup:
             for label, value in SOURCE_BUTTONS
         ]
     )
+
+
+# Согласие на запись встречи — последний шаг анкеты (ТЗ, Блок 11): [Да] [Нет]
+CONSENT_CALLBACK_PREFIX = "consent:"
+
+
+def consent_keyboard() -> InlineKeyboardMarkup:
+    """Кнопки согласия на запись встречи."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="Да", callback_data=f"{CONSENT_CALLBACK_PREFIX}yes"),
+                InlineKeyboardButton(text="Нет", callback_data=f"{CONSENT_CALLBACK_PREFIX}no"),
+            ]
+        ]
+    )

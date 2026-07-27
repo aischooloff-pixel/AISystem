@@ -108,6 +108,93 @@ def build_client_card(
     return "\n".join(parts)
 
 
+def build_pre_meeting_report(
+    fields: dict, answers: list[str], consent: bool, analysis: dict | None
+) -> str:
+    """Отчёт Юлии по заполненной анкете «Точка сбоя» (ТЗ, Блок 11).
+
+    Содержит всё, что перечислено в ТЗ: данные клиента · источник · основной
+    запрос · почему именно сейчас · желаемый результат · что уже предпринимал ·
+    ключевые формулировки · что уточнить на встрече.
+
+    ``analysis=None`` (OpenAI недоступен) отчёт не отменяет: разделы, которые
+    берутся из ответов напрямую, на месте — анкета клиента не пропадает.
+    """
+
+    def answer(index: int) -> str:
+        """Ответ на вопрос анкеты по номеру (1–7)."""
+        value = answers[index - 1] if 0 < index <= len(answers) else ""
+        return value.strip() or "— (без ответа)"
+
+    name = fields.get("name") or "Без имени"
+    username = fields.get("username")
+    who = f"👤 {name} ({username})" if username else f"👤 {name}"
+    source = fields.get("source", "—")
+    source_detail = fields.get("source_detail")
+    source_line = f"📍 Источник: {source}" + (f" → {source_detail}" if source_detail else "")
+
+    analysis = analysis or {}
+    # Основной запрос: формулировка AI, иначе — ответ клиента на вопрос 1
+    main_request = analysis.get("main_request") or answer(1)
+    quotes = "\n".join(f"· «{q}»" for q in analysis.get("key_phrases") or []) or "—"
+    clarify = "\n".join(f"· {t}" for t in analysis.get("topics_to_clarify") or []) or "—"
+
+    parts = [
+        "📋 АНКЕТА ЗАПОЛНЕНА · «Точка сбоя»",
+        "",
+        who,
+        source_line,
+        f"🎙 Согласие на запись встречи: {'да' if consent else 'нет'}",
+    ]
+    if analysis.get("preliminary_status"):
+        status = analysis["preliminary_status"]
+        confidence = int(analysis.get("confidence") or 0)
+        parts.append(
+            f"Предварительная оценка AI: {STATUS_HEADERS.get(status, status)} "
+            f"({confidence}%) — решение за вами"
+        )
+    parts += [
+        "",
+        DIVIDER,
+        "",
+        "ОСНОВНОЙ ЗАПРОС",
+        main_request,
+    ]
+    if analysis.get("summary"):
+        parts += ["", "РЕЗЮМЕ", analysis["summary"]]
+    parts += [
+        "",
+        "ПОЧЕМУ ИМЕННО СЕЙЧАС",
+        answer(2),
+        "",
+        "ЧТО БЕСПОКОИТ СИЛЬНЕЕ ВСЕГО",
+        answer(3),
+        "",
+        "ЧТО УЖЕ ПРОБОВАЛ(А)",
+        answer(4),
+        "",
+        "ЖЕЛАЕМЫЙ РЕЗУЛЬТАТ",
+        answer(5),
+        "",
+        "ПОЧЕМУ ВАЖНО РЕШИТЬ ИМЕННО ЭТО",
+        answer(6),
+        "",
+        "ВАЖНОЕ ЗАРАНЕЕ",
+        answer(7),
+        "",
+        DIVIDER,
+        "",
+        "КЛЮЧЕВЫЕ ФОРМУЛИРОВКИ КЛИЕНТА",
+        quotes,
+        "",
+        "ЧТО СТОИТ УТОЧНИТЬ НА ВСТРЕЧЕ",
+        clarify,
+    ]
+    if not analysis:
+        parts += ["", "⚠️ AI-разбор анкеты недоступен — ответы приведены как есть."]
+    return "\n".join(parts)
+
+
 async def notify_yulia(bot: Bot, admin_id: int, text: str, reply_markup=None) -> bool:
     """Сообщение Юлии. Ошибка отправки логируется, бот не падает."""
     try:

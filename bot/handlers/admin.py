@@ -7,12 +7,13 @@ from __future__ import annotations
 import time
 from datetime import datetime
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.filters import BaseFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
 from bot.config import Config
+from bot.handlers.questionnaire import send_questionnaire
 from bot.services import airtable
 from bot.services.ai import get_ai
 from bot.services.knowledge import get_knowledge_stats, reload_knowledge
@@ -53,6 +54,7 @@ HELP = (
     "/assign_me {id} · /assign_ai {id} — взять / вернуть AI\n"
     "/stop {id} — завершить взаимодействие\n"
     "/note {id} {текст} — заметка\n"
+    "/anketa {id} — отправить анкету «Точка сбоя» (/anketa_force — повторно)\n"
     "/stats — статистика · /tasks — задачи · /hot — горячие\n"
     "/reload_knowledge — перечитать базу знаний\n/cancel — отменить правку ответа на комментарий\n"
     "/health — проверка систем"
@@ -190,6 +192,67 @@ async def _simple_update(
     await airtable.update_contact(contact["id"], updates)
     _log_action(message, action)
     await _reply(message, done_text)
+
+
+@router.message(F.text.startswith("/anketa_force"))
+async def cmd_anketa_force(message: Message, config: Config, state: FSMContext, bot: Bot) -> None:
+    """Повторная отправка анкеты, даже если она уже заполнена.
+
+    Зарегистрирована ДО ``/anketa``: фильтр startswith иначе перехватил бы
+    ``/anketa_force`` первым же обработчиком.
+    """
+    if not _is_admin(message, config):
+        await _reply(message, "Команда недоступна.")
+        return
+    args = _args(message)
+    contact = await _contact_or_report(message, args)
+    if contact is None:
+        return
+    telegram_id = int(args[0])
+    name = contact.get("fields", {}).get("name") or "клиент"
+    _log_action(message, "anketa_force")
+    if await send_questionnaire(bot, state, telegram_id):
+        await _reply(message, f"Анкета отправлена повторно: {name}.")
+    else:
+        await _reply(message, f"Не удалось отправить анкету {name}.")
+
+
+@router.message(F.text.startswith("/anketa"))
+async def cmd_anketa(message: Message, config: Config, state: FSMContext, bot: Bot) -> None:
+    """Отправляет клиенту анкету «Точка сбоя» (Блок 11).
+
+    Рассылает только Юлия: решение «пора заполнять анкету» экспертное
+    (Конституция, принцип 5), и клиент к этому моменту уже передан ей.
+    """
+    if not _is_admin(message, config):
+        await _reply(message, "Команда недоступна.")
+        return
+    args = _args(message)
+    contact = await _contact_or_report(message, args)
+    if contact is None:
+        return
+    telegram_id = int(args[0])
+    name = contact.get("fields", {}).get("name") or "клиент"
+
+    existing = await airtable.get_diagnostics(telegram_id)
+    if existing:
+        # Анкету не отправляем молча повторно: прежние ответы важнее
+        await _reply(
+            message,
+            f"У {name} уже есть заполненная анкета ({len(existing)} шт.). "
+            "Отправить ещё раз: /anketa_force {id}",
+        )
+        return
+
+    _log_action(message, "anketa")
+    if await send_questionnaire(bot, state, telegram_id):
+        await _reply(message, f"Анкета отправлена: {name}.")
+    else:
+        await _reply(
+            message,
+            f"Не удалось отправить анкету {name} — возможно, клиент "
+            "не начинал диалог с ботом или заблокировал его.",
+        )
 
 
 @router.message(F.text.startswith("/pause"))

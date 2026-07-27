@@ -22,6 +22,7 @@ from bot import texts
 from bot.config import Config
 from bot.services import airtable
 from bot.services.notifier import notify_yulia
+from bot.states import QUESTIONNAIRE_STATE_PREFIX
 from bot.utils.helpers import automation_stopped
 from bot.utils.logger import get_app_logger
 
@@ -48,6 +49,17 @@ class PauseCheckMiddleware(BaseMiddleware):
         if event.from_user.id == self.config.telegram_admin_id:
             return await handler(event, data)
 
+        # Анкета «Точка сбоя» (Блок 11) — исключение: её запускает сама Юлия
+        # уже после передачи клиента, когда автоматика остановлена. Без этого
+        # ответы на вопросы анкеты проглатывались бы как обычные сообщения
+        # переданного клиента. Диалог с AI при этом НЕ возобновляется:
+        # хендлер анкеты только собирает ответы.
+        state = data.get("state")
+        if state is not None:
+            current_state = await state.get_state()
+            if current_state and current_state.startswith(QUESTIONNAIRE_STATE_PREFIX):
+                return await handler(event, data)
+
         ok, contact = await airtable.find_contact_checked(event.from_user.id)
         if not ok or contact is None:
             # Сбой Airtable или новый клиент — обычная обработка
@@ -73,7 +85,6 @@ class PauseCheckMiddleware(BaseMiddleware):
                 bot, self.config.telegram_admin_id, f"{name} написал(а): {text[:1000]}"
             )
         # «Ответить один раз»: повторные сообщения сохраняем молча
-        state = data.get("state")
         already_notified = False
         if state is not None:
             state_data = await state.get_data()

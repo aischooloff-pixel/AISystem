@@ -64,6 +64,7 @@ class AirtableClient:
         comments_table: str = "Comments",
         posts_table: str = "Posts",
         tasks_table: str = "Tasks",
+        diagnostics_table: str = "Diagnostics",
         timezone_name: str = "Europe/Moscow",
         timeout: float = 15.0,
         retry_delays: tuple[float, ...] = RETRY_DELAYS,
@@ -77,6 +78,7 @@ class AirtableClient:
         self.comments = comments_table
         self.posts = posts_table
         self.tasks = tasks_table
+        self.diagnostics = diagnostics_table
         self._tz = ZoneInfo(timezone_name)
         self._retry_delays = retry_delays
         self._rate_window = rate_window
@@ -455,6 +457,33 @@ class AirtableClient:
             self.tasks, record_id, {"status": "done", "completed_at": _now_iso()}
         )
 
+    # ── Diagnostics (Блок 11: анкета перед диагностикой) ──
+
+    async def create_diagnostic(self, telegram_id: int, data: dict) -> dict | None:
+        """Заводит запись анкеты. ``booking_status`` по умолчанию ``requested``:
+        встречу назначает Юлия, AI её не планирует."""
+        fields = {
+            "contact_telegram_id": telegram_id,
+            "booking_status": data.pop("booking_status", "requested"),
+            "created_at": _now_iso(),
+            **{k: v for k, v in data.items() if v is not None},
+        }
+        return await self._create(self.diagnostics, fields)
+
+    async def get_diagnostics(self, telegram_id: int) -> list[dict] | None:
+        """Все анкеты контакта, свежие сверху."""
+        return await self._list_all(
+            self.diagnostics,
+            {
+                "filterByFormula": f"{{contact_telegram_id}}={int(telegram_id)}",
+                "sort[0][field]": "created_at",
+                "sort[0][direction]": "desc",
+            },
+        )
+
+    async def update_diagnostic(self, record_id: str, data: dict) -> dict | None:
+        return await self._update(self.diagnostics, record_id, data)
+
     # ── Аналитика и экспорт ──
 
     async def get_report_data(self, date_from: str, date_to: str) -> dict | None:
@@ -546,6 +575,7 @@ def init_airtable(config: Config) -> AirtableClient:
         comments_table=config.airtable_comments_table,
         posts_table=config.airtable_posts_table,
         tasks_table=config.airtable_tasks_table,
+        diagnostics_table=config.airtable_diagnostics_table,
         timezone_name=config.timezone,
     )
     return _client
@@ -647,6 +677,18 @@ async def get_open_tasks(assignee: str | None = None) -> list[dict] | None:
 
 async def complete_task(record_id: str) -> dict | None:
     return await get_client().complete_task(record_id)
+
+
+async def create_diagnostic(telegram_id: int, data: dict) -> dict | None:
+    return await get_client().create_diagnostic(telegram_id, data)
+
+
+async def get_diagnostics(telegram_id: int) -> list[dict] | None:
+    return await get_client().get_diagnostics(telegram_id)
+
+
+async def update_diagnostic(record_id: str, data: dict) -> dict | None:
+    return await get_client().update_diagnostic(record_id, data)
 
 
 async def get_report_data(date_from: str, date_to: str) -> dict | None:

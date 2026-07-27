@@ -227,3 +227,34 @@ def validate_comment_analysis(data: dict) -> list[str]:
     if "suggested_reply" in data and not isinstance(data["suggested_reply"], str):
         problems.append(f"suggested_reply: не строка ({data['suggested_reply']!r})")
     return problems
+
+
+QUESTIONNAIRE_REQUIRED = (
+    "main_request",
+    "summary",
+    "key_phrases",
+    "preliminary_status",
+    "topics_to_clarify",
+    "confidence",
+)
+
+
+def validate_questionnaire_analysis(data: dict) -> list[str]:
+    """Проблемы разбора анкеты «Точка сбоя» (Блок 11); пустой список — валидно."""
+    problems: list[str] = []
+    _check_required(data, QUESTIONNAIRE_REQUIRED, problems)
+    if "preliminary_status" in data:
+        _check_enum(data, "preliminary_status", STATUSES, problems)
+    if "confidence" in data:
+        _check_confidence(data, problems)
+    for key in ("main_request", "summary"):
+        if key in data and not isinstance(data[key], str):
+            problems.append(f"{key}: не строка ({data[key]!r})")
+    # Списки уходят прямо в отчёт Юлии — строки, иначе форматирование падает
+    for key in ("key_phrases", "topics_to_clarify"):
+        value = data.get(key)
+        if key in data and (
+            not isinstance(value, list) or any(not isinstance(item, str) for item in value)
+        ):
+            problems.append(f"{key}: не список строк ({value!r})")
+    return problems

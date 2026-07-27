@@ -61,7 +61,14 @@ def test_date_fields_accept_both_date_and_datetime() -> None:
     assert check_schema(schema) == []
 
 
-def test_diagnostics_not_required() -> None:
-    """Diagnostics не входит в обязательную схему, пока Юлия не подтвердит
-    анкету (решение в logs.txt, Сессия 1)."""
-    assert "Diagnostics" not in EXPECTED_SCHEMA
+def test_diagnostics_required() -> None:
+    """Diagnostics входит в обязательную схему: Блок 11 (анкета «Точка сбоя»)
+    подтверждён Юлией 2026-07-27 и включён в Спринт 1."""
+    assert "Diagnostics" in EXPECTED_SCHEMA
+    # Поля из модели данных ТЗ, Часть 3, таблица 6
+    assert EXPECTED_SCHEMA["Diagnostics"].keys() >= {
+        "contact_telegram_id",
+        "booking_status",
+        "questionnaire",
+        "recording_consent",
+    }

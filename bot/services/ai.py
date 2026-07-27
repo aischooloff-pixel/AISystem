@@ -18,6 +18,7 @@ from bot import texts
 from bot.config import Config
 from bot.prompts.comment_analyzer import build_comment_prompt
 from bot.prompts.qualifier import build_info_answer_prompt, build_qualification_prompt
+from bot.prompts.questionnaire_analyzer import build_questionnaire_prompt
 from bot.prompts.scenario_detector import build_scenario_prompt
 from bot.prompts.system_prompt import build_system_prompt
 from bot.utils.logger import get_app_logger
@@ -314,6 +315,21 @@ class AIService:
             logger.warning("Стоп-фраза в suggested_reply: %r — предложение очищено", stop_phrase)
             data["suggested_reply"] = ""
         return data
+
+    async def analyze_questionnaire(
+        self, answers: list[str], *, knowledge: str | None = None
+    ) -> dict | None:
+        """Разбор анкеты «Точка сбоя» (Блок 11).
+
+        ``None`` при любом сбое — вызывающая сторона обязана всё равно
+        отправить отчёт Юлии из сырых ответов: анкета не должна пропасть
+        из-за недоступности OpenAI.
+        """
+        return await self._ask_json(
+            build_questionnaire_prompt(answers),
+            validators.validate_questionnaire_analysis,
+            knowledge=knowledge,
+        )
 
 
 # ── Модульный интерфейс ──

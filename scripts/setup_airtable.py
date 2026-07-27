@@ -23,8 +23,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 META_URL = "https://api.airtable.com/v0/meta/bases/{base_id}/tables"
 
 # Ожидаемая структура — модель данных из ТЗ, Часть 3.
-# Таблица Diagnostics намеренно НЕ включена: Блок 11 ждёт подтверждения Юлии
-# (решение зафиксировано в logs.txt, Сессия 1).
+# Diagnostics включена: Блок 11 (анкета «Точка сбоя») подтверждён Юлией
+# 2026-07-27 и входит в Спринт 1.
 # Формат: {таблица: {поле: множество допустимых типов Airtable}}.
 _DATE = {"date", "dateTime"}
 _TEXT = {"singleLineText"}
@@ -130,6 +130,19 @@ EXPECTED_SCHEMA: dict[str, dict[str, set[str]]] = {
         "reason": _LONG,
         "created_by": _SELECT,
         "completed_at": _DATE,
+        "created_at": _DATE,
+    },
+    "Diagnostics": {
+        "contact_telegram_id": _NUM,
+        "date": _DATE,
+        "booking_status": _SELECT,
+        "questionnaire": _LONG,
+        "recording_consent": _CHECK,
+        "payment_status": _SELECT,
+        "meeting_link": {"url", "singleLineText"},
+        "materials": _LONG,
+        "result": _LONG,
+        "next_step": _TEXT,
         "created_at": _DATE,
     },
 }
