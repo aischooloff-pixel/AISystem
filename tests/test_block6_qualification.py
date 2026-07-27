@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from aiogram.enums import ContentType
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -31,7 +32,8 @@ class FakeMessage:
         self.from_user = user
         self.text = text
         self.caption = caption
-        self.content_type = content_type
+        # Enum, как у настоящего Message (у str-заглушки нет .value)
+        self.content_type = ContentType(content_type)
         self.chat = type("Chat", (), {"type": "private"})()
         self.sent: list[str] = []
 

@@ -276,7 +276,7 @@ async def message_instead_of_source(message: Message, state: FSMContext) -> None
     }
     if await airtable.upsert_contact(user.id, data) is None:
         logger.error("Контакт telegram_id=%s не сохранён (Airtable недоступен)", user.id)
-    raw = message.text or message.caption or f"<{message.content_type}>"
+    raw = message.text or message.caption or f"<{message.content_type.value}>"
     await airtable.add_touch(
         user.id,
         "dm_start",

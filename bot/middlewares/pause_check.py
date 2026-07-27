@@ -70,7 +70,7 @@ class PauseCheckMiddleware(BaseMiddleware):
             return await handler(event, data)
 
         # Клиент у Юлии: сообщение не теряется, AI не отвечает
-        text = event.text or event.caption or f"<{event.content_type}>"
+        text = event.text or event.caption or f"<{event.content_type.value}>"
         await self._store_message(contact, text)
         await airtable.add_touch(
             event.from_user.id,

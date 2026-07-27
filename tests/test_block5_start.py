@@ -9,6 +9,7 @@ Contacts + касание в Touches; повторный /start не созда�
 from __future__ import annotations
 
 import pytest
+from aiogram.enums import ContentType
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -36,7 +37,9 @@ class FakeMessage:
         self.from_user = user
         self.text = text
         self.caption = caption
-        self.content_type = content_type
+        # Именно enum, как у настоящего Message: у str-заглушки не было .value,
+        # и «<ContentType.VOICE>» в CRM проходил мимо тестов
+        self.content_type = ContentType(content_type)
         self.sent: list[tuple[str, dict]] = []
 
     async def answer(self, text: str, **kwargs) -> None:

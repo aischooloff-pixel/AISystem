@@ -146,7 +146,9 @@ async def _contact_for_dialog(message: Message) -> dict | None:
     from bot.utils.helpers import automation_stopped
 
     if automation_stopped(fields):
-        text = message.text or message.caption or f"<{message.content_type}>"
+        # .value обязателен: с Python 3.11 f-строка от enum со смешанным типом
+        # даёт «ContentType.VOICE», и в CRM у Юлии оказывается имя константы
+        text = message.text or message.caption or f"<{message.content_type.value}>"
         await _append_history(contact, "client", text)
         await airtable.add_touch(
             user.id,
@@ -655,7 +657,7 @@ async def non_text_in_dialog(message: Message) -> None:
         return
     contact = await _get_or_create_contact(user)
     if contact is not None:
-        raw = message.caption or f"<{message.content_type}>"
+        raw = message.caption or f"<{message.content_type.value}>"
         await airtable.add_touch(
             int(contact["fields"].get("telegram_id") or 0),
             "question_answered",
