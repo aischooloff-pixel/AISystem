@@ -171,22 +171,22 @@ def test_stats_counts_files_and_tokens(tmp_path: Path) -> None:
     assert stats["estimated_tokens"] == stats["total_chars"] // CHARS_PER_TOKEN
 
 
-def test_token_estimate_logged_on_load(caplog: pytest.LogCaptureFixture) -> None:
+def test_token_estimate_logged_on_load(app_caplog: pytest.LogCaptureFixture) -> None:
     """Критерий: оценка токенов выводится в лог при загрузке."""
-    with caplog.at_level(logging.INFO, logger="app"):
+    with app_caplog.at_level(logging.INFO, logger="app"):
         load_knowledge(KNOWLEDGE_DIR)
-    messages = " ".join(record.getMessage() for record in caplog.records)
+    messages = " ".join(record.getMessage() for record in app_caplog.records)
     assert "токенов" in messages
 
 
-def test_oversize_warning(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+def test_oversize_warning(tmp_path: Path, app_caplog: pytest.LogCaptureFixture) -> None:
     """Превышение 100 000 токенов — предупреждение в лог (сигнал перехода
     на векторную базу), а не ошибка."""
     (tmp_path / "big.md").write_text("х" * (TOKEN_WARN_LIMIT * CHARS_PER_TOKEN + 3), "utf-8")
-    with caplog.at_level(logging.WARNING, logger="app"):
+    with app_caplog.at_level(logging.WARNING, logger="app"):
         text = load_knowledge(tmp_path)
     assert text  # база загружена, бот работает
-    assert any("векторную базу" in r.getMessage() for r in caplog.records)
+    assert any("векторную базу" in r.getMessage() for r in app_caplog.records)
 
 
 def test_real_knowledge_under_token_limit() -> None:

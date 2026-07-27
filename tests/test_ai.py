@@ -236,34 +236,34 @@ async def test_broken_json_retried_once_with_clarification() -> None:
     assert any("СТРОГО одним валидным JSON" in m["content"] for m in retry_messages)
 
 
-async def test_invalid_after_retry_returns_none(caplog: pytest.LogCaptureFixture) -> None:
+async def test_invalid_after_retry_returns_none(app_caplog: pytest.LogCaptureFixture) -> None:
     """Окончательный провал валидации → None (передача Юлии «Ошибка обработки AI»)."""
     fake = FakeOpenAI(["не json", "опять не json"])
     service = make_service(fake)
     try:
-        with caplog.at_level(logging.ERROR, logger="app"):
+        with app_caplog.at_level(logging.ERROR, logger="app"):
             result = await service.detect_scenario("тест", knowledge=KNOWLEDGE)
     finally:
         await service.close()
     assert result is None
-    assert any("не прошёл валидацию" in r.getMessage() for r in caplog.records)
+    assert any("не прошёл валидацию" in r.getMessage() for r in app_caplog.records)
 
 
 async def test_schema_failure_goes_straight_to_yulia_without_retry(
-    caplog: pytest.LogCaptureFixture,
+    app_caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Валидный JSON, но провал схемы (шаги 2–4) → сразу передача Юлии,
     БЕЗ повторного запроса (retry формата — только для битого JSON, шаг 1)."""
     fake = FakeOpenAI(['{"scenario": "D_unknown", "confidence": 92, "reason": "х"}'])
     service = make_service(fake)
     try:
-        with caplog.at_level(logging.ERROR, logger="app"):
+        with app_caplog.at_level(logging.ERROR, logger="app"):
             result = await service.detect_scenario("тест", knowledge=KNOWLEDGE)
     finally:
         await service.close()
     assert result is None
     assert len(fake.requests) == 1, "провал схемы не должен тратить второй вызов OpenAI"
-    assert any("не прошёл схему" in r.getMessage() for r in caplog.records)
+    assert any("не прошёл схему" in r.getMessage() for r in app_caplog.records)
 
 
 async def test_200_with_null_choices_does_not_crash() -> None:
@@ -352,7 +352,7 @@ async def test_confidence_at_threshold_stays_automatic() -> None:
 
 
 async def test_stop_phrase_in_bot_response_replaced(
-    caplog: pytest.LogCaptureFixture,
+    app_caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Критерий: стоп-фраза в bot_response → WARNING, нейтральный шаблон,
     передача Юлии."""
@@ -363,7 +363,7 @@ async def test_stop_phrase_in_bot_response_replaced(
     fake = FakeOpenAI([json.dumps(poisoned)])
     service = make_service(fake)
     try:
-        with caplog.at_level(logging.WARNING, logger="app"):
+        with app_caplog.at_level(logging.WARNING, logger="app"):
             result = await service.qualify("Клиент: ...", knowledge=KNOWLEDGE)
     finally:
         await service.close()
@@ -371,7 +371,7 @@ async def test_stop_phrase_in_bot_response_replaced(
     assert result["bot_response"] == texts.NEUTRAL_FALLBACK
     assert result["needs_yulia"] is True
     assert "Стоп-фраза" in result["needs_yulia_reason"]
-    assert any("Стоп-фраза" in r.getMessage() for r in caplog.records)
+    assert any("Стоп-фраза" in r.getMessage() for r in app_caplog.records)
 
 
 async def test_qualification_prompt_builds_from_history_list() -> None:
@@ -406,7 +406,7 @@ async def test_analyze_comment_valid() -> None:
 
 
 async def test_stop_phrase_in_suggested_reply_cleared(
-    caplog: pytest.LogCaptureFixture,
+    app_caplog: pytest.LogCaptureFixture,
 ) -> None:
     poisoned = make_comment_analysis(
         suggested_reply="Мария, я знаю причину вашей проблемы — приходите."
@@ -414,7 +414,7 @@ async def test_stop_phrase_in_suggested_reply_cleared(
     fake = FakeOpenAI([json.dumps(poisoned)])
     service = make_service(fake)
     try:
-        with caplog.at_level(logging.WARNING, logger="app"):
+        with app_caplog.at_level(logging.WARNING, logger="app"):
             result = await service.analyze_comment("текст", "Мария", knowledge=KNOWLEDGE)
     finally:
         await service.close()
@@ -492,25 +492,25 @@ async def test_server_error_5xx_retried_then_success() -> None:
     assert result is not None
 
 
-async def test_final_failure_returns_none(caplog: pytest.LogCaptureFixture) -> None:
+async def test_final_failure_returns_none(app_caplog: pytest.LogCaptureFixture) -> None:
     """Окончательная неудача → лог ERROR, None; исключение не бросается."""
     fake = FakeOpenAI([503, 503])
     service = make_service(fake)
     try:
-        with caplog.at_level(logging.ERROR, logger="app"):
+        with app_caplog.at_level(logging.ERROR, logger="app"):
             result = await service.detect_scenario("тест", knowledge=KNOWLEDGE)
     finally:
         await service.close()
     assert result is None
-    assert any(r.levelno == logging.ERROR for r in caplog.records)
+    assert any(r.levelno == logging.ERROR for r in app_caplog.records)
 
 
-async def test_invalid_api_key_does_not_crash(caplog: pytest.LogCaptureFixture) -> None:
+async def test_invalid_api_key_does_not_crash(app_caplog: pytest.LogCaptureFixture) -> None:
     """Критерий: ошибки API не роняют бота — проверено неверным ключом (401)."""
     fake = FakeOpenAI([401])
     service = make_service(fake)
     try:
-        with caplog.at_level(logging.ERROR, logger="app"):
+        with app_caplog.at_level(logging.ERROR, logger="app"):
             result = await service.qualify("Клиент: тест", knowledge=KNOWLEDGE)
     finally:
         await service.close()
@@ -531,16 +531,16 @@ async def test_network_error_does_not_crash() -> None:
 # ── Логирование ──
 
 
-async def test_requests_and_responses_logged(caplog: pytest.LogCaptureFixture) -> None:
+async def test_requests_and_responses_logged(app_caplog: pytest.LogCaptureFixture) -> None:
     """Критерий: все запросы и ответы логируются (полный ответ — в лог)."""
     reply = '{"scenario": "B_problem", "confidence": 87, "reason": "описал проблему"}'
     fake = FakeOpenAI([reply])
     service = make_service(fake)
     try:
-        with caplog.at_level(logging.INFO, logger="app"):
+        with app_caplog.at_level(logging.INFO, logger="app"):
             await service.detect_scenario("У меня всё рушится", knowledge=KNOWLEDGE)
     finally:
         await service.close()
-    messages = [r.getMessage() for r in caplog.records]
+    messages = [r.getMessage() for r in app_caplog.records]
     assert any("OpenAI запрос" in m for m in messages)
     assert any("OpenAI ответ" in m and reply in m for m in messages)

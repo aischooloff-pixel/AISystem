@@ -8,14 +8,42 @@ FakeAirtable хранит записи в памяти и понимает ро�
 
 from __future__ import annotations
 
+import logging
 import re
 import time
+from collections.abc import Iterator
 from itertools import count
 
 import httpx
 import pytest
 
 from bot.services.airtable import AirtableClient
+from bot.utils.logger import APP_LOGGER_NAME
+
+
+@pytest.fixture
+def app_caplog(caplog: pytest.LogCaptureFixture) -> Iterator[pytest.LogCaptureFixture]:
+    """caplog, который действительно видит логгер ``app``.
+
+    ``setup_logging()`` ставит ``app.propagate = False`` — иначе записи двоились
+    бы через root. Но caplog слушает именно root, поэтому после любого теста,
+    поднявшего логирование, обычный caplog для ``app`` молча пуст, и проверка
+    логов даёт ложно-зелёный результат в зависимости от порядка тестов.
+    Вешаем обработчик caplog прямо на логгер ``app``.
+    """
+    logger = logging.getLogger(APP_LOGGER_NAME)
+    previous_propagate = logger.propagate
+    # Обработчик caplog вешаем прямо на логгер, а propagate гасим: иначе, пока
+    # setup_logging() ещё не вызывался и propagate=True, запись пришла бы и
+    # напрямую, и через root — и каждая строка посчиталась бы дважды.
+    logger.propagate = False
+    logger.addHandler(caplog.handler)
+    try:
+        yield caplog
+    finally:
+        logger.removeHandler(caplog.handler)
+        logger.propagate = previous_propagate
+
 
 # {field}=123 · {field}="строка" · TRUE()/FALSE() не используются в простых равенствах
 _EQ_RE = re.compile(r'\{(\w+)\}=("(?:[^"\\]|\\.)*"|-?\d+)')

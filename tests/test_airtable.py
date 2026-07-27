@@ -25,32 +25,32 @@ TID = 555000111
 
 
 async def test_retry_on_429_then_success(
-    client: AirtableClient, fake: FakeAirtable, caplog: pytest.LogCaptureFixture
+    client: AirtableClient, fake: FakeAirtable, app_caplog: pytest.LogCaptureFixture
 ) -> None:
     """Критерий: retry работает — проверено имитацией 429."""
     fake.seed("Contacts", {"telegram_id": TID, "name": "Анна"})
     fake.fail_with = [429, 429]
-    with caplog.at_level(logging.WARNING, logger="app"):
+    with app_caplog.at_level(logging.WARNING, logger="app"):
         record = await client.find_contact(TID)
     assert record is not None and record["fields"]["name"] == "Анна"
-    retries = [r for r in caplog.records if "retry" in r.getMessage()]
+    retries = [r for r in app_caplog.records if "retry" in r.getMessage()]
     assert len(retries) == 2
 
 
 async def test_final_failure_returns_none_without_raising(
-    client: AirtableClient, fake: FakeAirtable, caplog: pytest.LogCaptureFixture
+    client: AirtableClient, fake: FakeAirtable, app_caplog: pytest.LogCaptureFixture
 ) -> None:
     """Критерий: при окончательной неудаче — ERROR в лог и None,
     исключение наверх не бросается."""
     fake.fail_with = [500, 500, 500]
-    with caplog.at_level(logging.ERROR, logger="app"):
+    with app_caplog.at_level(logging.ERROR, logger="app"):
         record = await client.find_contact(TID)
     assert record is None
-    assert any(r.levelno == logging.ERROR for r in caplog.records)
+    assert any(r.levelno == logging.ERROR for r in app_caplog.records)
 
 
 async def test_network_error_does_not_crash(
-    client: AirtableClient, fake: FakeAirtable, caplog: pytest.LogCaptureFixture
+    client: AirtableClient, fake: FakeAirtable, app_caplog: pytest.LogCaptureFixture
 ) -> None:
     """Критерий: недоступность Airtable не роняет бота (сетевая ошибка)."""
     fake.fail_with = [
@@ -58,10 +58,10 @@ async def test_network_error_does_not_crash(
         httpx.ConnectError("сеть недоступна"),
         httpx.ConnectError("сеть недоступна"),
     ]
-    with caplog.at_level(logging.ERROR, logger="app"):
+    with app_caplog.at_level(logging.ERROR, logger="app"):
         result = await client.get_pending_comments()
     assert result is None
-    assert any("сетевая ошибка" in r.getMessage() for r in caplog.records)
+    assert any("сетевая ошибка" in r.getMessage() for r in app_caplog.records)
 
 
 async def test_rate_limit_semaphore(fake: FakeAirtable) -> None:
@@ -87,13 +87,13 @@ async def test_rate_limit_semaphore(fake: FakeAirtable) -> None:
 
 
 async def test_all_operations_logged(
-    client: AirtableClient, fake: FakeAirtable, caplog: pytest.LogCaptureFixture
+    client: AirtableClient, fake: FakeAirtable, app_caplog: pytest.LogCaptureFixture
 ) -> None:
     """Критерий: все операции логируются."""
-    with caplog.at_level(logging.INFO, logger="app"):
+    with app_caplog.at_level(logging.INFO, logger="app"):
         await client.upsert_contact(TID, {"name": "Анна"})
         await client.add_touch(TID, "dm_start", "Первое обращение")
-    airtable_lines = [r.getMessage() for r in caplog.records if "Airtable" in r.getMessage()]
+    airtable_lines = [r.getMessage() for r in app_caplog.records if "Airtable" in r.getMessage()]
     assert len(airtable_lines) >= 3  # поиск + создание контакта + касание
 
 
