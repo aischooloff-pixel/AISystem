@@ -152,6 +152,37 @@ PRODUCT_INTERESTS = {
     "unknown",
 }
 
+# Признаки горячего клиента — «Критерии квалификации», раздел «Горячий клиент».
+# Статус hot без названного признака кодом понижается до warm (см. AIService).
+READINESS_SIGNALS = {
+    "booking",
+    "price_and_dates",
+    "payment",
+    "personal_contact",
+    "explicit_confirmation",
+    # Ось срочности определена там же через «указывает на временные рамки» —
+    # без этого признака правило смещения не могло бы сработать законно
+    "deadline",
+    "none",
+}
+
+# Тема запроса — «Возможные направления» из продуктовой линейки Юлии.
+# Берём её словарь, а не свой: статистика должна складываться в те же
+# категории, которыми она описывает практику.
+REQUEST_CATEGORIES = {
+    "отношения",
+    "денежные сценарии",
+    "самоценность",
+    "границы",
+    "внутренняя устойчивость",
+    "профессиональные изменения",
+    "бизнес и управление",
+    "делегирование",
+    "масштабирование",
+    "переход от ручного управления к системной модели",
+    "другое",
+}
+
 
 def _check_confidence(data: dict, problems: list[str]) -> None:
     value = data.get("confidence")
@@ -213,6 +244,14 @@ def validate_qualification(data: dict) -> list[str]:
             _check_enum(data, axis, LEVELS, problems)
     if "product_interest" in data:
         _check_enum(data, "product_interest", PRODUCT_INTERESTS, problems)
+    # Два поля добавлены позже остальных и намеренно необязательны: модель,
+    # забывшая новое поле, не должна ронять весь ответ и гнать клиента
+    # на «Ошибку обработки AI» — отсутствие трактуется как «признака нет»
+    # и «категория не определена».
+    if "readiness_signal" in data and data["readiness_signal"] is not None:
+        _check_enum(data, "readiness_signal", READINESS_SIGNALS, problems)
+    if "request_category" in data and data["request_category"] is not None:
+        _check_enum(data, "request_category", REQUEST_CATEGORIES, problems)
     if "confidence" in data:
         _check_confidence(data, problems)
     if "needs_yulia" in data and not isinstance(data["needs_yulia"], bool):

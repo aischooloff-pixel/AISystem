@@ -138,6 +138,7 @@ async def cmd_info(message: Message, config: Config) -> None:
         "urgency": fields.get("urgency"),
         "confidence": fields.get("ai_confidence") or 0,
         "next_action": fields.get("next_step"),
+        "request_category": fields.get("request_category"),
     }
     timeline = await airtable.build_timeline(int(fields.get("telegram_id") or 0))
     card = build_client_card(

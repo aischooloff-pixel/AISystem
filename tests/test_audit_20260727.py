@@ -30,8 +30,15 @@ async def test_shift_rule_promotes_warm_to_hot() -> None:
     могла вернуть warm с двумя high, и горячий клиент молча оставался
     в прогреве, не доходя до Юлии.
     """
+    # Признак готовности назван: без него обе оси высокими быть не могут
+    # и правило смещения не имеет права сработать (см. следующий тест)
     payload = make_qualification(
-        status="warm", readiness="high", urgency="high", needs_yulia=False, confidence=95
+        status="warm",
+        readiness="high",
+        urgency="high",
+        readiness_signal="deadline",
+        needs_yulia=False,
+        confidence=95,
     )
     fake = FakeOpenAI([json.dumps(payload, ensure_ascii=False)])
     result = await make_service(fake).qualify("диалог", knowledge=KNOWLEDGE)
@@ -50,7 +57,12 @@ async def test_shift_rule_does_not_fire_on_single_axis(readiness: str, urgency: 
     """Смещение требует ОБЕИХ высоких осей — одной мало, иначе в hot
     уезжал бы каждый второй тёплый клиент."""
     payload = make_qualification(
-        status="warm", readiness=readiness, urgency=urgency, needs_yulia=False, confidence=95
+        status="warm",
+        readiness=readiness,
+        urgency=urgency,
+        readiness_signal="deadline",
+        needs_yulia=False,
+        confidence=95,
     )
     fake = FakeOpenAI([json.dumps(payload, ensure_ascii=False)])
     result = await make_service(fake).qualify("диалог", knowledge=KNOWLEDGE)

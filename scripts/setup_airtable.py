@@ -65,6 +65,9 @@ EXPECTED_SCHEMA: dict[str, dict[str, set[str]]] = {
         "consent": _CHECK,
         "touches_count": _NUM,
         "product_interest": _SELECT,
+        # Тема запроса из «Возможных направлений» продуктовой линейки —
+        # для статистики по направлениям практики
+        "request_category": _SELECT,
         "result": _SELECT,
         "qualification_completed": _CHECK,
         "handoff_date": _DATE,

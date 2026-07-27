@@ -219,6 +219,8 @@ async def _store_qualification(contact: dict, qualification: dict, review_days: 
         updates["scenario"] = qualification["scenario"]
     if qualification.get("product_interest"):
         updates["product_interest"] = qualification["product_interest"]
+    if qualification.get("request_category"):
+        updates["request_category"] = qualification["request_category"]
     await airtable.update_contact(contact["id"], updates)
 
 
@@ -256,6 +258,10 @@ async def _finish(
             confidence_threshold=config.ai_confidence_threshold,
         )
         await _send_bot_turn(message, contact, texts.HANDOFF_MESSAGE)
+        # Нецелевому обращению рассказывать о диагностике незачем — его
+        # передают Юлии по другой причине
+        if status != "non_target":
+            await _send_bot_turn(message, contact, texts.HANDOFF_FOLLOWUP)
         await state.clear()
         return
 
@@ -613,6 +619,93 @@ async def open_dialog_message(
 
 # ── Восстановление после рестарта: сообщение без состояния FSM ──
 
+# Последняя реплика бота → состояние, в котором она была отправлена.
+# MemoryStorage теряет позицию при перезапуске, а переписка в CRM его
+# переживает — по ней позиция и восстанавливается.
+_STATE_BY_LAST_QUESTION: tuple[tuple[str, object], ...] = (
+    (texts.A_INTRO, Dialog.a_question_1),
+    (texts.A_QUESTION_2, Dialog.a_question_2),
+    (texts.QUESTION_2, Dialog.b_question_2),
+    (texts.QUESTION_3, Dialog.b_question_3),
+    (texts.QUESTION_4, Dialog.b_question_4),
+    (texts.QUESTION_5, Dialog.b_question_5),
+)
+
+# Вопрос бота → ключ ответа в данных FSM. Нужен, чтобы после рестарта
+# карточка Юлии не потеряла секции «ЧТО УЖЕ ПРОБОВАЛ» и «ЧЕГО ХОЧЕТ».
+_ANSWER_KEY_BY_QUESTION = {
+    texts.QUESTION_2: "q2",
+    texts.QUESTION_3: "q3",
+    texts.QUESTION_4: "q4",
+    texts.QUESTION_5: "q5",
+    texts.A_INTRO: "a1",
+    # Вопрос сценария A о желаемом результате питает ту же секцию карточки,
+    # что и вопрос 4 сценария B (см. a_answer_2)
+    texts.A_QUESTION_2: "q4",
+}
+
+
+def _resume_state(history: list[dict], fields: dict):
+    """Позиция в диалоге, восстановленная по переписке.
+
+    Без этого клиент, ответивший ровно в момент перезапуска, слышал тот же
+    вопрос ещё раз: состояние терялось, и разговор начинался с определения
+    сценария. Воспроизводилось при любом рестарте — деплой, авторестарт
+    systemd, перезагрузка сервера.
+    """
+    last_bot = next((t.get("text") for t in reversed(history) if t.get("role") == "bot"), None)
+    if last_bot is None:
+        return Dialog.waiting_first_message
+    for question, resumed in _STATE_BY_LAST_QUESTION:
+        if last_bot == question:
+            return resumed
+    # Последняя реплика — не вопрос: это ответ по базе знаний (сценарий C)
+    if fields.get("scenario") == "C_info":
+        return Dialog.c_info
+    return Dialog.waiting_first_message
+
+
+def _data_from_history(history: list[dict]) -> dict:
+    """Ответы клиента по вопросам бота — восстановление данных FSM."""
+    data: dict = {}
+    first_client = next((t.get("text") for t in history if t.get("role") == "client"), None)
+    if first_client:
+        data["q1"] = first_client
+    for index, turn in enumerate(history):
+        if turn.get("role") != "bot":
+            continue
+        key = _ANSWER_KEY_BY_QUESTION.get(turn.get("text") or "")
+        if key is None:
+            continue
+        answer = next(
+            (t.get("text") for t in history[index + 1 :] if t.get("role") == "client"), None
+        )
+        if answer:
+            data[key] = answer
+    return data
+
+
+async def _continue_from(
+    resumed, message: Message, state: FSMContext, bot: Bot, config: Config
+) -> None:
+    """Передаёт сообщение хендлеру того шага, на котором диалог прервался."""
+    if resumed is Dialog.a_question_1:
+        await a_answer_1(message, state)
+    elif resumed is Dialog.a_question_2:
+        await a_answer_2(message, state, bot, config)
+    elif resumed is Dialog.b_question_2:
+        await b_answer_2(message, state, bot, config)
+    elif resumed is Dialog.b_question_3:
+        await b_answer_3(message, state, bot, config)
+    elif resumed is Dialog.b_question_4:
+        await b_answer_4(message, state, bot, config)
+    elif resumed is Dialog.b_question_5:
+        await b_answer_5(message, state, bot, config)
+    elif resumed is Dialog.c_info:
+        await c_message(message, state, bot, config)
+    else:
+        await first_message(message, state, bot, config)
+
 
 @router.message(StateFilter(None), F.text)
 async def restore_after_restart(
@@ -621,9 +714,10 @@ async def restore_after_restart(
     """Личное сообщение без состояния FSM (рестарт бота / клиент без /start).
 
     MemoryStorage теряет состояния при перезапуске — клиент посреди диалога
-    не должен получать тишину (Блок 12: «рестарт бота во время диалога»).
-    Квалифицированные продолжают свободный диалог, остальные — с определения
-    сценария. Переданные Юлии сюда не дойдут (middleware pause_check).
+    не должен ни получать тишину, ни слышать один и тот же вопрос дважды
+    (Блок 12: «рестарт бота во время диалога»). Квалифицированные продолжают
+    свободный диалог, остальные — с того шага, на котором остановились.
+    Переданные Юлии сюда не дойдут (middleware pause_check).
     """
     if message.chat.type != "private" or message.from_user is None:
         return
@@ -635,12 +729,27 @@ async def restore_after_restart(
     if contact is None:
         await _reply_safe(message, texts.TECH_ERROR)
         return
-    if contact.get("fields", {}).get("qualification_completed"):
+    fields = contact.get("fields", {})
+    if fields.get("qualification_completed"):
         await state.set_state(Dialog.open_dialog)
         await open_dialog_message(message, state, bot, config)
-    else:
-        await state.set_state(Dialog.waiting_first_message)
-        await first_message(message, state, bot, config)
+        return
+
+    history = _history_from(contact)
+    resumed = _resume_state(history, fields)
+    await state.set_state(resumed)
+    restored = _data_from_history(history)
+    if fields.get("scenario"):
+        restored["scenario"] = fields["scenario"]
+    if restored:
+        await state.update_data(**restored)
+    if resumed is not Dialog.waiting_first_message:
+        logger.info(
+            "Диалог telegram_id=%s восстановлен по переписке: продолжаю с %s",
+            message.from_user.id,
+            resumed.state,
+        )
+    await _continue_from(resumed, message, state, bot, config)
 
 
 # ── Нетекстовые сообщения в любом состоянии диалога ──

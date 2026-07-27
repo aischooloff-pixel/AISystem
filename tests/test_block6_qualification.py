@@ -210,7 +210,7 @@ async def test_scenario_a_two_questions_then_handoff(monkeypatch, fake_ai, confi
     m3 = FakeMessage(make_user(), "Хочу перестать наступать на грабли")
     await qual.a_answer_2(m3, state, bot, config)
 
-    assert m3.sent == [texts.HANDOFF_MESSAGE]
+    assert m3.sent == [texts.HANDOFF_MESSAGE, texts.HANDOFF_FOLLOWUP]
     assert crm.contact["fields"]["status"] == "hot"  # принудительно hot
     assert crm.contact["fields"]["assigned_to"] == "yulia"
     assert crm.contact["fields"]["paused"] is True
@@ -282,7 +282,7 @@ async def test_scenario_b_low_confidence_after_q5_hands_off(monkeypatch, fake_ai
     await qual.b_answer_5(m, state, bot, config)
 
     assert fake_ai.qualify_calls[-1]["final"] is True
-    assert m.sent == [texts.HANDOFF_MESSAGE]
+    assert m.sent == [texts.HANDOFF_MESSAGE, texts.HANDOFF_FOLLOWUP]
     assert crm.contact["fields"]["assigned_to"] == "yulia"
     assert bot.sent and "ТРЕБУЕТСЯ ЭКСПЕРТНАЯ ОЦЕНКА" in bot.sent[0][1]
 
@@ -302,7 +302,7 @@ async def test_immediate_handoff_trigger_mid_flow(monkeypatch, fake_ai, config):
     m = FakeMessage(make_user(), "Свяжите меня с Юлией, пожалуйста")
     await qual.b_answer_2(m, state, bot, config)
 
-    assert m.sent == [texts.HANDOFF_MESSAGE]
+    assert m.sent == [texts.HANDOFF_MESSAGE, texts.HANDOFF_FOLLOWUP]
     assert crm.contact["fields"]["assigned_to"] == "yulia"
     assert await state.get_state() is None
 
@@ -386,7 +386,7 @@ async def test_scenario_c_out_of_knowledge_hands_off(monkeypatch, fake_ai, confi
     m = FakeMessage(make_user(), "Работаете ли вы с корпорациями из Сингапура?")
     await qual.first_message(m, state, bot, config)
 
-    assert m.sent == [texts.HANDOFF_MESSAGE]
+    assert m.sent == [texts.HANDOFF_MESSAGE, texts.HANDOFF_FOLLOWUP]
     assert crm.contact["fields"]["assigned_to"] == "yulia"
 
 
@@ -470,7 +470,9 @@ async def test_uncertain_non_target_mid_flow_goes_to_yulia(monkeypatch, fake_ai,
     m = FakeMessage(make_user(), "неоднозначное сообщение")
     await qual.b_answer_2(m, state, bot, config)
 
-    assert m.sent == [texts.HANDOFF_MESSAGE]  # передача, а не прощание
+    # Передача, а не прощание. Рассказ о диагностике сюда не добавляется:
+    # вердикт «нецелевой» под вопросом, и навязывать формат работы рано
+    assert m.sent == [texts.HANDOFF_MESSAGE]
     assert crm.contact["fields"]["assigned_to"] == "yulia"
     assert bot.sent, "карточка Юлии не отправлена"
 
@@ -510,7 +512,7 @@ async def test_answers_non_dict_from_model_sanitized(monkeypatch, fake_ai, confi
     ]
     m = FakeMessage(make_user(), "готов")
     await qual.b_answer_5(m, state, FakeBot(), config)
-    assert m.sent == [texts.HANDOFF_MESSAGE]  # не упало
+    assert m.sent == [texts.HANDOFF_MESSAGE, texts.HANDOFF_FOLLOWUP]  # не упало
 
 
 async def test_open_dialog_upgrade_to_hot(monkeypatch, fake_ai, config):
@@ -526,6 +528,6 @@ async def test_open_dialog_upgrade_to_hot(monkeypatch, fake_ai, config):
     m = FakeMessage(make_user(), "Хорошо, я готов оплатить диагностику")
     await qual.open_dialog_message(m, state, bot, config)
 
-    assert m.sent == [texts.HANDOFF_MESSAGE]
+    assert m.sent == [texts.HANDOFF_MESSAGE, texts.HANDOFF_FOLLOWUP]
     assert crm.contact["fields"]["assigned_to"] == "yulia"
     assert ("warm", "hot") == crm.status_changes[0][:2]

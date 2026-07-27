@@ -79,10 +79,18 @@ class ScriptedOpenAI:
     def __init__(self) -> None:
         self.queues: dict[str, list] = {name: [] for name, _ in TASK_MARKERS}
         self.calls: list[str] = []
+        self.prompts: list[tuple[str, str]] = []
 
     def script(self, task: str, *replies) -> None:
         """Ответы модели: dict (сериализуется), str, int (HTTP-код) или исключение."""
         self.queues[task].extend(replies)
+
+    def last_prompt(self, task: str) -> str:
+        """Последний промпт этой задачи — что модель увидела на самом деле."""
+        for name, prompt in reversed(self.prompts):
+            if name == task:
+                return prompt
+        raise AssertionError(f"запросов задачи {task!r} не было")
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/models"):  # ping из /health
@@ -91,6 +99,7 @@ class ScriptedOpenAI:
         task = next((name for name, marker in TASK_MARKERS if marker in prompt), None)
         assert task is not None, f"неопознанная задача в промпте: {prompt[:150]!r}"
         self.calls.append(task)
+        self.prompts.append((task, prompt))
         queue = self.queues[task]
         assert queue, f"сценарий не задал ответ OpenAI для задачи {task!r}"
         item = queue.pop(0)
@@ -358,6 +367,11 @@ async def stage(config):  # noqa: F811
 # ── Готовые ответы модели ──
 
 
+def handed_off(person: Person) -> bool:
+    """Клиенту сказали о передаче и следом рассказали, что его ждёт."""
+    return person.inbox[-2:] == [texts.HANDOFF_MESSAGE, texts.HANDOFF_FOLLOWUP]
+
+
 def scenario(kind: str, confidence: int = 95) -> dict:
     return {"scenario": kind, "confidence": confidence, "reason": "признаки из сообщения"}
 
@@ -445,6 +459,7 @@ async def test_scenario_a_ready_reaches_yulia_in_two_questions(stage: Stage) -> 
         texts.A_INTRO,
         texts.A_QUESTION_2,
         texts.HANDOFF_MESSAGE,
+        texts.HANDOFF_FOLLOWUP,
     ]
 
     card = stage.yulia.last
@@ -534,7 +549,7 @@ async def test_low_confidence_at_the_end_goes_to_yulia_with_a_warning(stage: Sta
     await anna.says("Сложно сказать")
     await anna.says("Просто устала")
 
-    assert anna.last == texts.HANDOFF_MESSAGE
+    assert handed_off(anna)
     card = stage.yulia.last
     assert "ТРЕБУЕТСЯ ЭКСПЕРТНАЯ ОЦЕНКА" in card
     assert "уверенность AI 60%" in card
@@ -551,17 +566,127 @@ async def test_shift_rule_sends_a_warm_client_to_yulia(stage: Stage) -> None:
     stage.openai.script("scenario", scenario("B_problem"))
     stage.openai.script(
         "qualify",
-        qualification(status="warm", readiness="high", urgency="high", confidence=95),
+        qualification(
+            status="warm",
+            readiness="high",
+            urgency="high",
+            readiness_signal="deadline",
+            confidence=95,
+        ),
     )
 
     await anna.start("site")
     await anna.says("Ситуация повторяется, и решать надо прямо сейчас")
     await anna.says("Готова начать немедленно")
 
-    assert anna.last == texts.HANDOFF_MESSAGE
+    assert handed_off(anna)
     assert "🔥 ГОРЯЧИЙ ЛИД" in stage.yulia.last
     assert "смещени" in stage.yulia.last.lower(), "причина передачи не названа"
     assert stage.contact(anna)["status"] == "hot"
+
+
+async def test_describing_a_situation_is_not_a_hot_lead(stage: Stage) -> None:
+    """Человек описал ситуацию и ни слова не сказал о записи — это не «горячий».
+
+    Случай Елены 27.07: модель выдала hot с осями high/high/high, и Юлия
+    получила карточку «🔥 ГОРЯЧИЙ ЛИД» на клиентку, которая всего лишь
+    рассказала о бизнесе. Ложный ярлык задаёт Юлии неверную рамку разговора,
+    поэтому статус понижается — но передача остаётся, решение за ней.
+    """
+    elena = stage.client(name="Елена Иванова", username="elena")
+    stage.openai.script("scenario", scenario("B_problem"))
+    stage.openai.script(
+        "qualify",
+        qualification(
+            status="hot",
+            awareness="high",
+            readiness="high",
+            urgency="high",
+            readiness_signal="none",
+            confidence=92,
+        ),
+    )
+
+    await elena.start("telegram_channel")
+    await elena.says("Развиваю бизнес-проект, есть неуверенность в формате работы")
+    await elena.says("Очень многое зависит от меня, каждый этап закрываю лично")
+
+    card = stage.yulia.last
+    assert "ГОРЯЧИЙ ЛИД" not in card, "выдуманная готовность доехала до карточки"
+    assert "ТЁПЛЫЙ ЛИД" in card
+    assert "о готовности записаться не говорил" in card
+    assert "Готовность: средняя" in card and "Срочность: средняя" in card
+    assert stage.contact(elena)["status"] == "warm"
+
+
+async def test_request_category_reaches_the_card_and_the_crm(stage: Stage) -> None:
+    """Тема запроса классифицируется и попадает в карточку и в CRM.
+
+    Словарь тем — «Возможные направления» из продуктовой линейки Юлии,
+    а не выдуманный: статистика должна складываться в те категории,
+    которыми она сама описывает практику.
+    """
+    anna = stage.client()
+    stage.openai.script("scenario", scenario("B_problem"))
+    stage.openai.script(
+        "qualify",
+        qualification(
+            status="hot",
+            readiness_signal="booking",
+            request_category="делегирование",
+            confidence=93,
+        ),
+    )
+
+    await anna.start("site")
+    await anna.says("Не могу передать задачи команде")
+    await anna.says("Всё замыкается на мне")
+
+    assert "Тема: делегирование" in stage.yulia.last
+    assert stage.contact(anna)["request_category"] == "делегирование"
+
+
+async def test_invented_request_category_is_rejected(stage: Stage) -> None:
+    """Категория вне словаря — брак схемы: в CRM не должно появиться мусора."""
+    anna = stage.client()
+    stage.openai.script("scenario", scenario("B_problem"))
+    stage.openai.script("qualify", qualification(request_category="карьера и успех"))
+
+    await anna.start("site")
+    await anna.says("Не могу передать задачи команде")
+    await anna.says("Всё замыкается на мне")
+
+    assert anna.last == texts.TECH_ERROR
+    assert "request_category" not in stage.contact(anna)
+
+
+async def test_repeated_message_is_not_counted_as_engagement(stage: Stage) -> None:
+    """Повтор одной и той же реплики не попадает в промпт дважды.
+
+    Клиент дублирует сообщение, когда ответа не видно; модель же считала это
+    за «взаимодействовал трижды» и поднимала статус.
+    """
+    elena = stage.client(name="Елена Иванова", username="elena")
+    stage.crm.seed(
+        "Contacts",
+        {
+            "telegram_id": elena.id,
+            "name": elena.name,
+            "status": "cold",
+            "scenario": "B_problem",
+            "conversation_history": history(
+                ("client", "Всё держится на мне"),
+                ("bot", texts.QUESTION_2),
+                ("client", "Каждый этап закрываю лично"),
+            ),
+        },
+    )
+    stage.openai.script("qualify", qualification(confidence=50))
+
+    await elena.says("Каждый этап закрываю лично")  # тот же текст ещё раз
+
+    prompt = stage.openai.last_prompt("qualify")
+    assert prompt.count("Каждый этап закрываю лично") == 1, "повтор ушёл в модель дважды"
 
 
 async def test_non_target_is_closed_politely_and_automation_stops(stage: Stage) -> None:
@@ -602,6 +727,8 @@ async def test_unsure_non_target_is_never_closed_by_ai(stage: Stage) -> None:
     await anna.says("Я по поводу обучения, но не уверена")
     await anna.says("Хочу понять, подходит ли мне это")
 
+    # Передача есть, но рассказа о диагностике нет: вердикт «нецелевой»
+    # под вопросом, и предлагать формат работы преждевременно
     assert anna.last == texts.HANDOFF_MESSAGE, "AI закрыл диалог, не будучи уверенным"
     assert stage.yulia.inbox, "Юлия не узнала о спорном случае"
     assert stage.contact(anna)["paused"] is True
@@ -656,7 +783,7 @@ async def test_scenario_c_question_beyond_knowledge_goes_to_yulia(stage: Stage) 
     await anna.start("site")
     await anna.says("Вы работаете с юрлицами по договору?")
 
-    assert anna.last == texts.HANDOFF_MESSAGE
+    assert handed_off(anna)
     assert stage.yulia.inbox, "вопрос вне базы знаний не дошёл до Юлии"
 
 
@@ -802,7 +929,7 @@ async def test_stop_phrase_from_the_model_never_reaches_the_client(stage: Stage)
     await anna.says("Хочу понять причину")
 
     assert "гарантиру" not in " ".join(anna.inbox).lower(), "стоп-фраза дошла до клиента"
-    assert anna.last == texts.HANDOFF_MESSAGE
+    assert handed_off(anna)
     assert stage.yulia.inbox, "Юлия не уведомлена о срабатывании стоп-фразы"
 
 
@@ -816,6 +943,7 @@ async def test_client_matures_in_open_dialog_and_is_handed_over(stage: Stage) ->
         qualification(
             status="hot",
             confidence=94,
+            readiness_signal="booking",
             needs_yulia=True,
             needs_yulia_reason="Клиент готов записаться",
         ),
@@ -828,7 +956,7 @@ async def test_client_matures_in_open_dialog_and_is_handed_over(stage: Stage) ->
 
     await anna.says("Я подумала — давайте записываться")
 
-    assert anna.last == texts.HANDOFF_MESSAGE
+    assert handed_off(anna)
     assert "🔥 ГОРЯЧИЙ ЛИД" in stage.yulia.last
 
 
@@ -842,6 +970,96 @@ async def test_message_after_restart_without_state_is_not_ignored(stage: Stage) 
     await anna.says("Сколько длится диагностика?")  # без /start и без состояния
 
     assert anna.last == "Диагностика длится до 60 минут."
+
+
+def history(*turns: tuple[str, str]) -> str:
+    """conversation_history в том виде, в каком её пишет бот."""
+    return json.dumps(
+        [{"role": role, "text": text, "date": "2026-07-27T15:55:00+00:00"} for role, text in turns],
+        ensure_ascii=False,
+    )
+
+
+async def test_restart_mid_dialog_does_not_repeat_the_question(stage: Stage) -> None:
+    """Рестарт посреди квалификации: разговор продолжается, а не начинается.
+
+    Случай 27.07: клиентка ответила на вопрос 2 ровно в момент перезапуска,
+    состояние FSM погибло вместе с процессом, и она услышала тот же вопрос
+    ещё раз. До исправления диалог заходил на второй круг с определения
+    сценария; теперь позиция восстанавливается по переписке из CRM.
+    """
+    elena = stage.client(name="Елена Иванова", username="elena")
+    stage.crm.seed(
+        "Contacts",
+        {
+            "telegram_id": elena.id,
+            "name": elena.name,
+            "status": "cold",
+            "scenario": "B_problem",
+            "conversation_history": history(
+                ("client", "Развиваю бизнес-проект, есть неуверенность в формате работы"),
+                ("bot", texts.QUESTION_2),
+            ),
+        },
+    )
+    stage.openai.script("qualify", qualification(confidence=50))
+
+    await elena.says("Очень многое зависит от меня, каждый этап закрываю лично")
+
+    assert elena.last != texts.QUESTION_2, "бот повторил вопрос, на который уже получил ответ"
+    assert elena.last == texts.QUESTION_3, "диалог не продолжился со следующего шага"
+    assert "scenario" not in stage.openai.calls, "разговор пошёл на второй круг"
+
+
+async def test_restart_keeps_the_answers_for_yulias_card(stage: Stage) -> None:
+    """Ответы, данные до рестарта, доходят до карточки, а не теряются с FSM."""
+    elena = stage.client(name="Елена Иванова", username="elena")
+    stage.crm.seed(
+        "Contacts",
+        {
+            "telegram_id": elena.id,
+            "name": elena.name,
+            "status": "cold",
+            "scenario": "B_problem",
+            "conversation_history": history(
+                ("client", "Не растёт бизнес"),
+                ("bot", texts.QUESTION_2),
+                ("client", "Всё держится на мне"),
+                ("bot", texts.QUESTION_3),
+                ("client", "Пробовала нанимать помощников"),
+                ("bot", texts.QUESTION_4),
+            ),
+        },
+    )
+    stage.openai.script("qualify", qualification(status="hot", confidence=95))
+
+    await elena.says("Хочу выйти из операционки")
+
+    card = stage.yulia.last
+    assert "Пробовала нанимать помощников" in card, "потеряна секция «ЧТО УЖЕ ПРОБОВАЛ(А)»"
+    assert "Хочу выйти из операционки" in card, "потеряна секция «ЧЕГО ХОЧЕТ»"
+
+
+async def test_restart_in_scenario_a_resumes_at_the_right_question(stage: Stage) -> None:
+    """Сценарий A после рестарта не спрашивает про ситуацию заново."""
+    anna = stage.client()
+    stage.crm.seed(
+        "Contacts",
+        {
+            "telegram_id": anna.id,
+            "name": anna.name,
+            "status": "cold",
+            "scenario": "A_ready",
+            "conversation_history": history(
+                ("client", "Хочу записаться"),
+                ("bot", texts.A_INTRO),
+            ),
+        },
+    )
+
+    await anna.says("Не растёт бизнес")
+
+    assert anna.last == texts.A_QUESTION_2
 
 
 async def test_conversation_history_keeps_both_sides(stage: Stage) -> None:

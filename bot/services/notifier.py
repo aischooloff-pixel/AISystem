@@ -75,6 +75,10 @@ def build_client_card(
         "ЗАПРОС",
         qualification.get("summary") or "—",
     ]
+    # Тема запроса из «Возможных направлений» продуктовой линейки — она же
+    # ложится в статистику по направлениям практики
+    if qualification.get("request_category"):
+        parts += ["", f"Тема: {qualification['request_category']}"]
     # Карточка обязана отвечать на все 8 вопросов (раздел 15) — секции
     # присутствуют всегда, даже если ответ в диалоге не прозвучал
     parts += ["", "ЧТО УЖЕ ПРОБОВАЛ(А)", answers.get("tried") or "— (не прозвучало в диалоге)"]
@@ -265,6 +269,9 @@ async def handoff_to_yulia(
     product = qualification.get("product_interest")
     if product:
         updates["product_interest"] = product
+    category = qualification.get("request_category")
+    if category:
+        updates["request_category"] = category
     await airtable.update_contact(record_id, updates)
 
     await airtable.create_task(

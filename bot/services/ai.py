@@ -240,6 +240,32 @@ class AIService:
         if data is None:
             return None
 
+        if data.get("readiness_signal") in (None, "none"):
+            # «Критерии квалификации» определяют и статус, и обе оси через
+            # наблюдаемые признаки: горячий — просит записаться / спрашивает
+            # цену и даты / готов оплатить / просит связаться лично / прямо
+            # подтверждает готовность; высокая срочность — просит связаться,
+            # готов оплачивать, называет сроки. Если не прозвучало ничего,
+            # высокими оси быть не могут, каким бы подходящим человек ни
+            # выглядел. 27.07 модель подняла до горячего клиентку, которая
+            # лишь описала ситуацию, — и правило смещения закрепило это
+            # на выдуманных осях.
+            downgraded = [axis for axis in ("readiness", "urgency") if data.get(axis) == "high"]
+            for axis in downgraded:
+                data[axis] = "medium"
+            if data.get("status") == "hot":
+                logger.info("Статус hot без признака готовности → warm, передаю Юлии на решение")
+                data["status"] = "warm"
+                data["needs_yulia"] = True
+                data["needs_yulia_reason"] = (
+                    "Проявляет интерес, но о готовности записаться не говорил — " "решение за вами"
+                )
+            elif downgraded:
+                logger.info(
+                    "Оси %s снижены: признак готовности в диалоге не прозвучал",
+                    ", ".join(downgraded),
+                )
+
         if (
             data.get("status") == "warm"
             and data.get("readiness") == "high"

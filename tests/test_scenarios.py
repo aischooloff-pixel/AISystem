@@ -86,7 +86,7 @@ async def test_scenario_03_price_question(monkeypatch, fake_ai, config):
     m3 = FakeMessage(make_user(), "Рост и системность")
     await qual.a_answer_2(m3, state, bot, config)
     assert crm.contact["fields"]["status"] == "hot"
-    assert m3.sent == [texts.HANDOFF_MESSAGE]
+    assert m3.sent == [texts.HANDOFF_MESSAGE, texts.HANDOFF_FOLLOWUP]
     assert bot.sent  # карточка Юлии
 
 
@@ -220,7 +220,7 @@ async def test_scenario_10_unknown_question(monkeypatch, fake_ai, config):
     fake_ai.qualifications = [valid_qualification(confidence=90)]
     m = FakeMessage(make_user(), "Делаете ли вы гороскопы совместимости?")
     await qual.first_message(m, state, FakeBot(), config)
-    assert m.sent == [texts.HANDOFF_MESSAGE]
+    assert m.sent == [texts.HANDOFF_MESSAGE, texts.HANDOFF_FOLLOWUP]
     assert crm.contact["fields"]["assigned_to"] == "yulia"
 
 
@@ -262,7 +262,10 @@ async def test_scenario_13_refuses_bot(monkeypatch, fake_ai, config):
     ]
     m = FakeMessage(make_user(), "Я не хочу разговаривать с ботом")
     await qual.b_answer_2(m, state, FakeBot(), config)
-    assert m.sent == [texts.HANDOFF_MESSAGE]  # без уговоров — сразу передача
+    assert m.sent == [
+        texts.HANDOFF_MESSAGE,
+        texts.HANDOFF_FOLLOWUP,
+    ]  # без уговоров — сразу передача
     assert crm.contact["fields"]["assigned_to"] == "yulia"
 
 
@@ -292,7 +295,7 @@ async def test_scenario_15_sensitive_info(monkeypatch, fake_ai, config):
     ]
     m = FakeMessage(make_user(), "Недавно пережила очень тяжёлое событие в семье...")
     await qual.b_answer_2(m, state, FakeBot(), config)
-    assert m.sent == [texts.HANDOFF_MESSAGE]
+    assert m.sent == [texts.HANDOFF_MESSAGE, texts.HANDOFF_FOLLOWUP]
     assert crm.contact["fields"]["assigned_to"] == "yulia"
 
 
