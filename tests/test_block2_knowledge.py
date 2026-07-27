@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 import pytest
@@ -28,8 +29,10 @@ KNOWLEDGE_DIR = Path(__file__).resolve().parent.parent / "bot" / "knowledge"
 # Все 8 файлов из структуры проекта (ТЗ, Часть 4)
 EXPECTED_FILES = [
     # Порядок алфавитный — в нём же get_knowledge() склеивает файлы.
-    # Восемь исходных (ТЗ, Блок 2) и шесть из пакета заказчика 2026-07-27,
-    # каждый из которых прямо адресован AI-помощнику.
+    # Восемь исходных (ТЗ, Блок 2), шесть из пакета заказчика 2026-07-27
+    # (каждый прямо адресован AI-помощнику) и внутренний регламент запретов,
+    # который Юлия решением от 2026-07-27 сохранила отдельно от FAQ.
+    "ai_safety.md",
     "brand.md",
     "brand_architecture.md",
     "cases.md",
@@ -117,7 +120,9 @@ def test_stop_phrases_present() -> None:
         "Вы сами виноваты.",
     ]:
         assert phrase in objections, f"нет запрещённой фразы: {phrase}"
-    faq = (KNOWLEDGE_DIR / "faq.md").read_text(encoding="utf-8")
+    # Перечень запретов живёт в отдельном регламенте: решением Юлии
+    # от 2026-07-27 это внутренние правила системы, а не раздел FAQ
+    safety = (KNOWLEDGE_DIR / "ai_safety.md").read_text(encoding="utf-8")
     for phrase in [
         "«Я знаю причину вашей проблемы»",
         "«После диагностики всё изменится»",
@@ -126,7 +131,24 @@ def test_stop_phrases_present() -> None:
         "«Это точно родовая проблема»",
         "«Вам поможет только этот метод»",
     ]:
-        assert phrase in faq, f"в faq.md нет запрещённого ответа: {phrase}"
+        assert phrase in safety, f"в ai_safety.md нет запрещённого ответа: {phrase}"
+
+
+def test_every_forbidden_answer_is_actually_blocked() -> None:
+    """Регламент и его исполнение не должны разойтись.
+
+    Запрет, который есть в документе, но не ловится валидатором, — это
+    обещание безопасности без самой безопасности: модель произнесёт фразу,
+    и она уйдёт клиенту. Список берём из самого регламента, а не из кода,
+    поэтому новый пункт в документе без поддержки в валидаторе уронит тест.
+    """
+    from bot.utils import validators
+
+    safety = (KNOWLEDGE_DIR / "ai_safety.md").read_text(encoding="utf-8")
+    forbidden = re.findall(r"^- «(.+?)»$", safety, re.M)
+    assert len(forbidden) >= 6, f"перечень запретов не разобрался: {forbidden}"
+    for phrase in forbidden:
+        assert validators.find_stop_phrase(phrase), f"валидатор пропускает запрет: {phrase!r}"
 
 
 def test_key_content_spot_checks() -> None:
