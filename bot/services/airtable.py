@@ -87,6 +87,11 @@ class AirtableClient:
         # два одновременных апдейта одного человека (двойной тап по кнопке)
         # без замка создали бы дубль — нарушение правила «КРИТИЧНО» из ТЗ.
         self._contact_locks: dict[int, asyncio.Lock] = {}
+        # То же для постов, и по той же причине: Telegram после простоя вываливает
+        # накопленные комментарии разом, обработчики идут параллельно и все
+        # обнаруживают «поста ещё нет». Замок общий на upsert_post и
+        # increment_post_counter — создать запись умеют оба.
+        self._post_locks: dict[str, asyncio.Lock] = {}
         self._http = httpx.AsyncClient(
             base_url=f"{API_URL}/{base_id}",
             headers={"Authorization": f"Bearer {api_key}"},
@@ -401,7 +406,14 @@ class AirtableClient:
     # ── Posts ──
 
     async def upsert_post(self, post_id: str, data: dict) -> dict | None:
-        """Пост канала: поиск по ``post_id`` → обновление, иначе создание."""
+        """Пост канала: поиск по ``post_id`` → обновление, иначе создание.
+
+        Пара «поиск → создание» атомарна в рамках процесса — см. ``_post_locks``.
+        """
+        async with self._post_locks.setdefault(str(post_id), asyncio.Lock()):
+            return await self._upsert_post_locked(post_id, data)
+
+    async def _upsert_post_locked(self, post_id: str, data: dict) -> dict | None:
         found = await self._find_one(self.posts, f"{{post_id}}={_quote(post_id)}")
         if found is False:
             logger.error("upsert_post(%s): поиск не удался, пропускаю", post_id)
@@ -418,6 +430,13 @@ class AirtableClient:
         return await self._update(self.posts, found["id"], updates)
 
     async def increment_post_counter(self, post_id: str, field: str) -> dict | None:
+        """Инкремент счётчика поста. Замок общий с ``upsert_post``: иначе
+        параллельные комментарии и создали бы дубли, и потеряли бы инкременты
+        (оба обработчика прочитали бы одно и то же значение)."""
+        async with self._post_locks.setdefault(str(post_id), asyncio.Lock()):
+            return await self._increment_post_counter_locked(post_id, field)
+
+    async def _increment_post_counter_locked(self, post_id: str, field: str) -> dict | None:
         found = await self._find_one(self.posts, f"{{post_id}}={_quote(post_id)}")
         if found is False:
             return None

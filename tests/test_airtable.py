@@ -223,6 +223,25 @@ async def test_posts_upsert_and_counters(client: AirtableClient, fake: FakeAirta
     assert fields["potential_clients_count"] == 1
 
 
+async def test_concurrent_post_writes_create_single_record(
+    client: AirtableClient, fake: FakeAirtable
+) -> None:
+    """Гонка «поиск → создание» для поста: после простоя Telegram присылает
+    накопленные комментарии разом, и все обработчики одного поста стартуют
+    параллельно. Проверено на живом трафике 2026-07-27: без замка девять
+    комментариев к посту 1080 создали девять записей в Posts.
+
+    Замок общий на оба метода, поэтому проверяем их вперемешку — и что дубля
+    нет, и что ни один инкремент не потерялся.
+    """
+    await asyncio.gather(
+        *(client.upsert_post("1080", {"topic": "Точка сбоя"}) for _ in range(5)),
+        *(client.increment_post_counter("1080", "comments_count") for _ in range(4)),
+    )
+    assert len(fake.tables["Posts"]) == 1, "гонка создала дубль поста"
+    assert fake.tables["Posts"][0]["fields"]["comments_count"] == 4, "инкремент потерян"
+
+
 async def test_tasks_lifecycle(client: AirtableClient, fake: FakeAirtable) -> None:
     created = await client.create_task(
         "Связаться с Анной",
