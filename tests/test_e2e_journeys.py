@@ -484,14 +484,26 @@ async def test_scenario_b_stops_asking_when_information_is_enough(stage: Stage) 
     """
     anna = stage.client()
     stage.openai.script("scenario", scenario("B_problem"))
-    stage.openai.script("qualify", qualification(confidence=92, bot_response="Понимаю вас."))
+    stage.openai.script(
+        "qualify", *[qualification(confidence=92, bot_response="Понимаю вас.")] * 4
+    )
 
     await anna.start("telegram_channel")
     await anna.says("У меня всё время повторяется одна и та же ситуация")
+    await anna.says("Года полтора")
     await anna.says("Сильнее всего беспокоит, что я не понимаю причину")
+    await anna.says("Пробовала психолога")
+    await anna.says("Хочу перестать это повторять")
 
-    assert anna.inbox == [texts.GREETING, texts.QUESTION_2, "Понимаю вас."]
-    assert texts.QUESTION_3 not in anna.inbox, "вопрос задан, хотя информации уже хватало"
+    assert anna.inbox == [
+        texts.GREETING,
+        texts.QUESTION_DURATION,
+        texts.QUESTION_2,
+        texts.QUESTION_3,
+        texts.QUESTION_4,
+        "Понимаю вас.",
+    ]
+    assert texts.QUESTION_5 not in anna.inbox, "пятый вопрос задан, хотя информации хватало"
     assert stage.yulia.inbox == [], "тёплый клиент не должен беспокоить Юлию"
 
     fields = stage.contact(anna)
@@ -510,6 +522,7 @@ async def test_scenario_b_asks_all_five_questions_when_unclear(stage: Stage) -> 
     stage.openai.script(
         "qualify",
         qualification(confidence=40),
+        qualification(confidence=45),
         qualification(confidence=50),
         qualification(confidence=60),
         qualification(confidence=93, bot_response="Спасибо, теперь картина яснее."),
@@ -517,6 +530,7 @@ async def test_scenario_b_asks_all_five_questions_when_unclear(stage: Stage) -> 
 
     await anna.start("referral")
     await anna.says("Не понимаю, почему всё рушится")
+    await anna.says("Уже второй год")
     await anna.says("Беспокоит ощущение бессилия")
     await anna.says("Пробовала психологов")
     await anna.says("Хочу стабильности")
@@ -524,6 +538,7 @@ async def test_scenario_b_asks_all_five_questions_when_unclear(stage: Stage) -> 
 
     assert anna.inbox == [
         texts.GREETING,
+        texts.QUESTION_DURATION,
         texts.QUESTION_2,
         texts.QUESTION_3,
         texts.QUESTION_4,
@@ -539,11 +554,12 @@ async def test_low_confidence_at_the_end_goes_to_yulia_with_a_warning(stage: Sta
     """Финальная квалификация ниже 85% — решает Юлия, а не AI (порог из ТЗ)."""
     anna = stage.client()
     stage.openai.script("scenario", scenario("B_problem"))
-    # Три промежуточных шага «информации мало» и финальный с той же оценкой
-    stage.openai.script("qualify", *[qualification(confidence=60)] * 4)
+    # Четыре промежуточных шага «информации мало» и финальный с той же оценкой
+    stage.openai.script("qualify", *[qualification(confidence=60)] * 5)
 
     await anna.start("site")
     await anna.says("Что-то не так, но не могу объяснить")
+    await anna.says("Давно уже")
     await anna.says("Не знаю даже, с чего начать")
     await anna.says("Наверное, всё сразу")
     await anna.says("Сложно сказать")
@@ -577,7 +593,9 @@ async def test_shift_rule_sends_a_warm_client_to_yulia(stage: Stage) -> None:
 
     await anna.start("site")
     await anna.says("Ситуация повторяется, и решать надо прямо сейчас")
-    await anna.says("Готова начать немедленно")
+    # Названный срок — наблюдаемый признак готовности: цепочка вопросов
+    # обрывается законно, ждать остальных ответов незачем
+    await anna.says("Больше года, но решить надо до конца месяца")
 
     assert handed_off(anna)
     assert "🔥 ГОРЯЧИЙ ЛИД" in stage.yulia.last
@@ -597,19 +615,25 @@ async def test_describing_a_situation_is_not_a_hot_lead(stage: Stage) -> None:
     stage.openai.script("scenario", scenario("B_problem"))
     stage.openai.script(
         "qualify",
-        qualification(
-            status="hot",
-            awareness="high",
-            readiness="high",
-            urgency="high",
-            readiness_signal="none",
-            confidence=92,
-        ),
+        *[
+            qualification(
+                status="hot",
+                awareness="high",
+                readiness="high",
+                urgency="high",
+                readiness_signal="none",
+                confidence=92,
+            )
+        ]
+        * 4,
     )
 
     await elena.start("telegram_channel")
     await elena.says("Развиваю бизнес-проект, есть неуверенность в формате работы")
+    await elena.says("Больше года")
     await elena.says("Очень многое зависит от меня, каждый этап закрываю лично")
+    await elena.says("Пробовала делегировать")
+    await elena.says("Хочу выстроить систему")
 
     card = stage.yulia.last
     assert "ГОРЯЧИЙ ЛИД" not in card, "выдуманная готовность доехала до карточки"
@@ -766,7 +790,7 @@ async def test_scenario_c_switches_to_b_when_a_request_appears(stage: Stage) -> 
     await anna.says("Расскажите о методе")
     await anna.says("У меня как раз повторяется одна ситуация")
 
-    assert anna.last == texts.QUESTION_2, "переключение на сценарий B не произошло"
+    assert anna.last == texts.QUESTION_DURATION, "переключение на сценарий B не произошло"
     assert stage.contact(anna)["scenario"] == "B_problem"
 
 
@@ -840,8 +864,9 @@ async def test_repeat_start_mid_dialog_does_not_reset_the_conversation(stage: St
     assert anna.last == texts.CONTINUE_DIALOG
     assert stage.contact(anna)["touches_count"] >= 2
 
-    await anna.says("Беспокоит непонимание причины")
-    assert anna.last == "Понимаю.", "диалог продолжился не с того места"
+    # Состояние сохранилось: бот ждёт ответ на заданный вопрос, а не начинает заново
+    await anna.says("Года полтора")
+    assert anna.last == texts.QUESTION_2, "диалог продолжился не с того места"
 
 
 async def test_client_handed_over_gets_one_answer_then_silence(stage: Stage) -> None:
@@ -887,7 +912,9 @@ async def test_voice_message_gets_a_polite_request_for_text(stage: Stage) -> Non
     """Голосовое в диалоге: просим текст, состояние не двигаем, ничего не теряем."""
     anna = stage.client()
     stage.openai.script("scenario", scenario("B_problem"))
-    stage.openai.script("qualify", qualification(confidence=91, bot_response="Понимаю."))
+    stage.openai.script(
+        "qualify", *[qualification(confidence=91, bot_response="Понимаю.")] * 4
+    )
 
     await anna.start("site")
     await anna.says("Повторяется одна ситуация")
@@ -896,8 +923,13 @@ async def test_voice_message_gets_a_polite_request_for_text(stage: Stage) -> Non
     assert anna.last == texts.ASK_TEXT_PLEASE
     assert "<voice>" in str(stage.table("Touches")), "нетекстовое сообщение не зафиксировано"
 
+    # Голосовое не сдвинуло состояние: диалог продолжается с того же вопроса
+    await anna.says("Года два")
+    assert anna.last == texts.QUESTION_2, "после голосового диалог сбился"
     await anna.says("Беспокоит непонимание")
-    assert anna.last == "Понимаю.", "после голосового диалог сбился"
+    await anna.says("Пробовала разное")
+    await anna.says("Хочу ясности")
+    assert anna.last == "Понимаю."
 
 
 async def test_openai_failure_never_shows_a_traceback_to_the_client(stage: Stage) -> None:
@@ -939,7 +971,9 @@ async def test_client_matures_in_open_dialog_and_is_handed_over(stage: Stage) ->
     stage.openai.script("scenario", scenario("B_problem"))
     stage.openai.script(
         "qualify",
-        qualification(confidence=92, bot_response="Понимаю вас."),
+        # Четыре шага цепочки вопросов: тёплый, признака готовности нет
+        *[qualification(confidence=92, bot_response="Понимаю вас.")] * 4,
+        # Клиент сам вернулся с готовностью — теперь признак прозвучал
         qualification(
             status="hot",
             confidence=94,
@@ -951,7 +985,10 @@ async def test_client_matures_in_open_dialog_and_is_handed_over(stage: Stage) ->
 
     await anna.start("site")
     await anna.says("Повторяется одна ситуация")
+    await anna.says("Больше года")
     await anna.says("Беспокоит непонимание")
+    await anna.says("Пробовала сама")
+    await anna.says("Хочу разобраться")
     assert anna.last == "Понимаю вас."
 
     await anna.says("Я подумала — давайте записываться")
@@ -1076,7 +1113,8 @@ async def test_conversation_history_keeps_both_sides(stage: Stage) -> None:
     roles = [turn["role"] for turn in history]
     assert roles == ["client", "bot", "client", "bot"]
     assert history[0]["text"] == "Повторяется одна ситуация"
-    assert history[-1]["text"] == "Понимаю вас."
+    assert history[1]["text"] == texts.QUESTION_DURATION
+    assert history[-1]["text"] == texts.QUESTION_2
 
 
 # ══════════════════════════════════════════════════════════════════════

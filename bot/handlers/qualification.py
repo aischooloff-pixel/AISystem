@@ -5,9 +5,12 @@
 - A «Готовность записаться»: ровно два вопроса → status=hot → немедленная
   передача Юлии. Дополнительная квалификация не проводится.
 - B «Описывает проблему»: первое сообщение = ответ на вопрос 1 (его задаёт
-  приветствие), дальше вопросы 2–4 и вопрос 5 только при недостатке
-  информации. Один вопрос за раз; квалификация завершается досрочно,
-  как только информации достаточно (confidence ≥ порога).
+  приветствие), затем вопрос о давности ситуации (добавлен Юлией 2026-07-28)
+  и вопросы 2–4; вопрос 5 — только при недостатке информации. Один вопрос
+  за раз. Досрочно цепочку обрывают лишь наблюдаемые события: названный
+  признак готовности, нецелевой запрос, основание передачи из раздела 11.
+  Высокая уверенность в статусе таким событием НЕ является — она измеряет
+  уверенность в статусе, а не полноту собранной картины.
 - C «Информационный интерес»: ответ по базе знаний без квалификации;
   появился собственный запрос → переключение на сценарий B.
 
@@ -42,6 +45,7 @@ DIALOG_STATES = (
     Dialog.waiting_first_message,
     Dialog.a_question_1,
     Dialog.a_question_2,
+    Dialog.b_duration,
     Dialog.b_question_2,
     Dialog.b_question_3,
     Dialog.b_question_4,
@@ -243,6 +247,7 @@ async def _finish(
         {
             "tried": state_data.get("q3"),
             "goal": state_data.get("q4"),
+            "duration": state_data.get("duration"),
         }
     )
 
@@ -310,8 +315,21 @@ async def _intermediate_step(
     """Шаг сценария B: проверка достаточности → следующий вопрос или финал.
 
     Промежуточная квалификация (final=False): низкая уверенность = «мало
-    информации, спрашиваем дальше», а не передача Юлии. Триггеры передачи
-    (needs_yulia от модели), hot и non_target завершают квалификацию сразу.
+    информации, спрашиваем дальше», а не передача Юлии.
+
+    Досрочно завершают квалификацию только НАБЛЮДАЕМЫЕ события: человек
+    назвал признак готовности (просит записаться · спрашивает цену и даты ·
+    готов оплатить · просит связаться лично · подтверждает готовность ·
+    называет срок), запрос оказался нецелевым, или модель назвала причину
+    немедленной передачи из раздела 11 ТЗ.
+
+    Высокая уверенность в статусе таким событием НЕ является — и раньше
+    являлась. Модель после двух реплик уверенно ставила «warm 90%», условие
+    считало это «информации достаточно», и диалог обрывался на втором
+    вопросе. С точки зрения ТЗ это была подмена: confidence измеряет
+    уверенность в статусе, а не полноту собранной картины. FSM сценария B
+    в ТЗ — ``q1 → q2 → q3 → q4 → [q5]``: в скобках только пятый вопрос,
+    остальные обязательны.
     """
     qualification = await get_ai().qualify(history, final=(next_question is None))
     if qualification is None:
@@ -326,13 +344,28 @@ async def _intermediate_step(
         qualification["needs_yulia"] = True
         if not qualification.get("needs_yulia_reason"):
             qualification["needs_yulia_reason"] = "Требуется экспертная оценка"
+    signal = qualification.get("readiness_signal")
+    # Уверенность закрывает только пятый вопрос — единственный, который ТЗ
+    # ставит в скобки («только если информации недостаточно»). Раньше это же
+    # условие закрывало и вопросы 3–4, и разговор обрывался на втором.
+    confident_enough_for_last = (
+        next_question is texts.QUESTION_5
+        and int(qualification.get("confidence") or 0) >= config.ai_confidence_threshold
+    )
     enough = (
         qualification.get("needs_yulia")
-        or qualification.get("status") in ("hot", "non_target")
-        or int(qualification.get("confidence") or 0) >= config.ai_confidence_threshold
+        or (signal not in (None, "none"))
+        or qualification.get("status") == "non_target"
+        or confident_enough_for_last
         or next_question is None
     )
     if enough:
+        # Решение принимается здесь, а квалификация запрашивалась с
+        # final=False (пятый вопрос ещё числился впереди). Досрочно
+        # завершённый диалог обязан пройти те же финальные правила:
+        # порог 85% и пометку «решение за вами».
+        if next_question is not None:
+            qualification = get_ai().finalize(qualification)
         await _finish(message, state, bot, config, contact, qualification)
         return
     await _send_bot_turn(message, contact, next_question)
@@ -382,9 +415,11 @@ async def _route_scenario(
         await _send_bot_turn(message, contact, texts.A_INTRO)
         await state.set_state(Dialog.a_question_1)
     elif kind == "B_problem":
-        # Первое сообщение — уже ответ на вопрос 1 (его задало приветствие)
-        await _send_bot_turn(message, contact, texts.QUESTION_2)
-        await state.set_state(Dialog.b_question_2)
+        # Первое сообщение — уже ответ на вопрос 1 (его задало приветствие).
+        # Дальше цепочка ТЗ q2 → q3 → q4 → [q5], перед ней — вопрос о давности
+        # ситуации (добавлен Юлией 2026-07-28)
+        await _send_bot_turn(message, contact, texts.QUESTION_DURATION)
+        await state.set_state(Dialog.b_duration)
     elif kind == "non_target":
         await _close_non_target(message, state, bot, config, contact)
     elif kind == "handoff":
@@ -530,6 +565,7 @@ async def a_answer_2(message: Message, state: FSMContext, bot: Bot, config: Conf
             "status_reason": "готовность записаться (сценарий A)",
             "confidence": 100,
         }
+    qualification.pop("_hot_without_signal", None)  # решение здесь безусловное
     qualification["status"] = "hot"
     qualification["needs_yulia"] = True
     qualification.setdefault("needs_yulia_reason", "Готов записаться (сценарий A)")
@@ -560,6 +596,21 @@ async def _b_step(
     await state.update_data(**{data_key: message.text})
     await _intermediate_step(
         message, state, bot, config, contact, history, next_question, next_state
+    )
+
+
+@router.message(Dialog.b_duration, F.text)
+async def b_answer_duration(message: Message, state: FSMContext, bot: Bot, config: Config) -> None:
+    """Ответ о давности ситуации → вопрос 2 из ТЗ."""
+    await _b_step(
+        message,
+        state,
+        bot,
+        config,
+        "duration",
+        "Сценарий B, ответ о давности ситуации",
+        texts.QUESTION_2,
+        Dialog.b_question_2,
     )
 
 
@@ -698,6 +749,7 @@ async def open_dialog_message(
 _STATE_BY_LAST_QUESTION: tuple[tuple[str, object], ...] = (
     (texts.A_INTRO, Dialog.a_question_1),
     (texts.A_QUESTION_2, Dialog.a_question_2),
+    (texts.QUESTION_DURATION, Dialog.b_duration),
     (texts.QUESTION_2, Dialog.b_question_2),
     (texts.QUESTION_3, Dialog.b_question_3),
     (texts.QUESTION_4, Dialog.b_question_4),
@@ -707,6 +759,7 @@ _STATE_BY_LAST_QUESTION: tuple[tuple[str, object], ...] = (
 # Вопрос бота → ключ ответа в данных FSM. Нужен, чтобы после рестарта
 # карточка Юлии не потеряла секции «ЧТО УЖЕ ПРОБОВАЛ» и «ЧЕГО ХОЧЕТ».
 _ANSWER_KEY_BY_QUESTION = {
+    texts.QUESTION_DURATION: "duration",
     texts.QUESTION_2: "q2",
     texts.QUESTION_3: "q3",
     texts.QUESTION_4: "q4",
@@ -766,6 +819,8 @@ async def _continue_from(
         await a_answer_1(message, state)
     elif resumed is Dialog.a_question_2:
         await a_answer_2(message, state, bot, config)
+    elif resumed is Dialog.b_duration:
+        await b_answer_duration(message, state, bot, config)
     elif resumed is Dialog.b_question_2:
         await b_answer_2(message, state, bot, config)
     elif resumed is Dialog.b_question_3:

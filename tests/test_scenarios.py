@@ -63,11 +63,18 @@ async def test_scenario_02_problem_described(monkeypatch, fake_ai, config):
     fake_ai.scenarios = [{"scenario": "B_problem", "confidence": 92, "reason": "проблема"}]
     m = FakeMessage(make_user(), "У меня повторяется одна и та же ситуация")
     await qual.first_message(m, state, FakeBot(), config)
-    assert m.sent == [texts.QUESTION_2]
+    assert m.sent == [texts.QUESTION_DURATION]
 
-    fake_ai.qualifications = [valid_qualification(confidence=90, status="warm")]
-    m2 = FakeMessage(make_user(), "Сильнее всего беспокоит бессилие")
-    await qual.b_answer_2(m2, state, FakeBot(), config)
+    # Цепочка вопросов ТЗ проходится целиком: статус ставится в конце,
+    # а не на первом же уверенном ответе модели
+    fake_ai.qualifications = [valid_qualification(confidence=90, status="warm")] * 4
+    for answer, handler in (
+        ("Года полтора", qual.b_answer_duration),
+        ("Сильнее всего беспокоит бессилие", qual.b_answer_2),
+        ("Ходила к психологу", qual.b_answer_3),
+        ("Хочу перестать это повторять", qual.b_answer_4),
+    ):
+        await handler(FakeMessage(make_user(), answer), state, FakeBot(), config)
     assert crm.contact["fields"]["status"] == "warm"
 
 
@@ -324,7 +331,7 @@ async def test_tech_5000_char_message(monkeypatch, fake_ai, config):
     fake_ai.scenarios = [{"scenario": "B_problem", "confidence": 90, "reason": "ок"}]
     m = FakeMessage(make_user(), "х" * 5000)
     await qual.first_message(m, state, FakeBot(), config)
-    assert m.sent == [texts.QUESTION_2]
+    assert m.sent == [texts.QUESTION_DURATION]
 
 
 async def test_tech_restart_recovery_mid_dialog(monkeypatch, fake_ai, config):

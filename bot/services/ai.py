@@ -277,12 +277,13 @@ class AIService:
             for axis in downgraded:
                 data[axis] = "medium"
             if data.get("status") == "hot":
-                logger.info("Статус hot без признака готовности → warm, передаю Юлии на решение")
                 data["status"] = "warm"
-                data["needs_yulia"] = True
-                data["needs_yulia_reason"] = (
-                    "Проявляет интерес, но о готовности записаться не говорил — " "решение за вами"
-                )
+                # Пометку «решение за вами» ставит finalize(): пока вопросы
+                # не заданы, правильный ответ не «передать», а «спросить
+                # дальше». Раньше этот флаг взводился сразу и уводил Юлии
+                # недоспрошенного человека на втором вопросе.
+                data["_hot_without_signal"] = True
+                logger.info("Статус hot без признака готовности → warm")
             elif downgraded:
                 logger.info(
                     "Оси %s снижены: признак готовности в диалоге не прозвучал",
@@ -327,18 +328,6 @@ class AIService:
                 )
             data["needs_yulia"] = False
 
-        if final and data["confidence"] < self.confidence_threshold:
-            # Порог 85% из «Критериев квалификации», п. 9: ниже — решает Юлия.
-            # Пометка «Требуется экспертная оценка» обязательна ВСЕГДА (ТЗ);
-            # причину, названную моделью, сохраняем после пометки.
-            data["needs_yulia"] = True
-            mark = "Требуется экспертная оценка"
-            model_reason = data.get("needs_yulia_reason")
-            if isinstance(model_reason, str) and model_reason.strip() and mark not in model_reason:
-                data["needs_yulia_reason"] = f"{mark}: {model_reason}"
-            elif not (isinstance(model_reason, str) and mark in model_reason):
-                data["needs_yulia_reason"] = mark
-
         stop_phrase = validators.find_stop_phrase(data.get("bot_response"))
         if stop_phrase:
             logger.warning(
@@ -349,6 +338,42 @@ class AIService:
             data["needs_yulia"] = True
             if not data.get("needs_yulia_reason"):
                 data["needs_yulia_reason"] = f"Стоп-фраза в ответе AI: {stop_phrase}"
+
+        return self.finalize(data) if final else data
+
+    def finalize(self, data: dict) -> dict:
+        """Пост-правила, применимые только когда решение принимается.
+
+        Вынесены из ``qualify()``, потому что «последний вопрос задан» и
+        «решение принимается» — разные события. Сценарий B может завершиться
+        досрочно на четвёртом вопросе (пятый по ТЗ условный), и тогда решение
+        принимается по квалификации, запрошенной с ``final=False``. Без этого
+        разделения досрочно завершённый диалог терял и порог 85%, и пометку
+        «решение за вами» у горячего без признака готовности.
+
+        Вызывать повторно безопасно: маркер снимается, пометка не удваивается.
+        """
+        if data.pop("_hot_without_signal", False):
+            # «Критерии квалификации»: горячим человек становится по
+            # наблюдаемому признаку. Признака не прозвучало — статус уже
+            # понижен до warm, но Юлии показываем: интерес есть, решать ей.
+            logger.info("Статус hot без признака готовности — передаю Юлии на решение")
+            data["needs_yulia"] = True
+            data["needs_yulia_reason"] = (
+                "Проявляет интерес, но о готовности записаться не говорил — решение за вами"
+            )
+
+        if data.get("confidence", 100) < self.confidence_threshold:
+            # Порог 85% из «Критериев квалификации», п. 9: ниже — решает Юлия.
+            # Пометка «Требуется экспертная оценка» обязательна ВСЕГДА (ТЗ);
+            # причину, названную моделью, сохраняем после пометки.
+            data["needs_yulia"] = True
+            mark = "Требуется экспертная оценка"
+            model_reason = data.get("needs_yulia_reason")
+            if isinstance(model_reason, str) and model_reason.strip() and mark not in model_reason:
+                data["needs_yulia_reason"] = f"{mark}: {model_reason}"
+            elif not (isinstance(model_reason, str) and mark in model_reason):
+                data["needs_yulia_reason"] = mark
         return data
 
     # ── Ответ на информационный вопрос (сценарий C, Блок 6) ──

@@ -64,13 +64,17 @@ class FakeAI:
     async def qualify(self, conversation, *, final=True, **kwargs):
         self.qualify_calls.append({"final": final})
         result = self.qualifications.pop(0) if self.qualifications else None
-        if result is not None and final and result.get("confidence", 100) < 85:
-            result = {
-                **result,
+        return self.finalize(result) if result is not None and final else result
+
+    def finalize(self, data):
+        """Финальные правила настоящего AIService: порог 85% → передача Юлии."""
+        if data.get("confidence", 100) < 85:
+            return {
+                **data,
                 "needs_yulia": True,
                 "needs_yulia_reason": "Требуется экспертная оценка",
             }
-        return result
+        return data
 
     async def answer_info(self, question, **kwargs):
         return self.answers.pop(0) if self.answers else None
@@ -223,7 +227,12 @@ async def test_scenario_a_two_questions_then_handoff(monkeypatch, fake_ai, confi
 
 
 async def test_scenario_b_full_flow_to_warm(monkeypatch, fake_ai, config):
-    """B: вопросы по одному, после достаточности — warm, диалог продолжается."""
+    """B: вопросы по одному до конца цепочки, затем warm и свободный диалог.
+
+    Высокая уверенность в статусе цепочку не обрывает: ``confidence``
+    измеряет уверенность в статусе, а не полноту картины. FSM в ТЗ —
+    ``q1 → q2 → q3 → q4 → [q5]``, в скобках только пятый.
+    """
     crm = CRM(monkeypatch)
     bot = FakeBot()
     state = make_state()
@@ -232,27 +241,35 @@ async def test_scenario_b_full_flow_to_warm(monkeypatch, fake_ai, config):
     fake_ai.scenarios = [{"scenario": "B_problem", "confidence": 91, "reason": "описал проблему"}]
     m1 = FakeMessage(make_user(), "У меня повторяется одна и та же ситуация")
     await qual.first_message(m1, state, bot, config)
-    assert m1.sent == [texts.QUESTION_2]  # первое сообщение = ответ на вопрос 1
-    assert await state.get_state() == Dialog.b_question_2.state
+    assert m1.sent == [texts.QUESTION_DURATION]  # первое сообщение = ответ на вопрос 1
+    assert await state.get_state() == Dialog.b_duration.state
 
-    # Ответ на q2: информации мало (confidence 60, final=False → без передачи)
     fake_ai.qualifications = [valid_qualification(confidence=60)]
-    m2 = FakeMessage(make_user(), "Больше всего беспокоит выгорание")
-    await qual.b_answer_2(m2, state, bot, config)
-    assert m2.sent == [texts.QUESTION_3]
+    m2 = FakeMessage(make_user(), "Года полтора")
+    await qual.b_answer_duration(m2, state, bot, config)
+    assert m2.sent == [texts.QUESTION_2]
     assert fake_ai.qualify_calls[-1]["final"] is False
 
-    # Ответ на q3: информации достаточно (confidence 90) → финал warm
+    fake_ai.qualifications = [valid_qualification(confidence=60)]
+    m3 = FakeMessage(make_user(), "Больше всего беспокоит выгорание")
+    await qual.b_answer_2(m3, state, bot, config)
+    assert m3.sent == [texts.QUESTION_3]
+
+    # Даже при высокой уверенности вопрос 4 задаётся: цепочка не окончена
     fake_ai.qualifications = [valid_qualification(confidence=90, status="warm")]
-    m3 = FakeMessage(make_user(), "Пробовала психолога полгода")
-    await qual.b_answer_3(m3, state, bot, config)
-    assert "диагностика" in m3.sent[0]
+    m4 = FakeMessage(make_user(), "Пробовала психолога полгода")
+    await qual.b_answer_3(m4, state, bot, config)
+    assert m4.sent == [texts.QUESTION_4], "уверенность оборвала цепочку вопросов"
+
+    # После вопроса 4 информации достаточно → финал warm, вопрос 5 не нужен
+    fake_ai.qualifications = [valid_qualification(confidence=90, status="warm")]
+    m5 = FakeMessage(make_user(), "Хочу перестать повторять этот сценарий")
+    await qual.b_answer_4(m5, state, bot, config)
+    assert "диагностика" in m5.sent[0]
     assert await state.get_state() == Dialog.open_dialog.state
     assert crm.contact["fields"]["status"] == "warm"
     assert crm.contact["fields"]["qualification_completed"] is True
     assert ("cold", "warm") == crm.status_changes[0][:2]
-    # Вопросы 4–5 не задавались — досрочное завершение
-    assert texts.QUESTION_4 not in m3.sent
 
 
 async def test_scenario_b_question_5_only_when_needed(monkeypatch, fake_ai, config):
@@ -369,8 +386,8 @@ async def test_scenario_c_switches_to_b_on_problem(monkeypatch, fake_ai, config)
     m = FakeMessage(make_user(), "Вообще у меня самого бизнес не растёт уже год")
     await qual.c_message(m, state, bot, config)
 
-    assert m.sent == [texts.QUESTION_2]
-    assert await state.get_state() == Dialog.b_question_2.state
+    assert m.sent == [texts.QUESTION_DURATION]
+    assert await state.get_state() == Dialog.b_duration.state
 
 
 async def test_scenario_c_out_of_knowledge_hands_off(monkeypatch, fake_ai, config):
@@ -407,7 +424,7 @@ async def test_history_written_for_every_turn(monkeypatch, fake_ai, config):
     history = json.loads(crm.contact["fields"]["conversation_history"])
     assert [h["role"] for h in history] == ["client", "bot"]
     assert history[0]["text"] == "Всё рушится"
-    assert history[1]["text"] == texts.QUESTION_2
+    assert history[1]["text"] == texts.QUESTION_DURATION
     assert any(t[0] == "question_answered" for t in crm.touches)
 
 

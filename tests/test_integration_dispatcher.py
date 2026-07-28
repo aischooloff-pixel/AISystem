@@ -105,7 +105,7 @@ async def test_first_message_reaches_qualification_router(monkeypatch, bot_and_d
     await dp.storage.set_state(key, Dialog.waiting_first_message.state)
 
     await dp.feed_update(bot, make_update(CLIENT_ID, "У меня всё повторяется"))
-    assert session.sent == [(CLIENT_ID, texts.QUESTION_2)]
+    assert session.sent == [(CLIENT_ID, texts.QUESTION_DURATION)]
 
 
 async def test_paused_client_stopped_by_middleware(monkeypatch, bot_and_dp, config):

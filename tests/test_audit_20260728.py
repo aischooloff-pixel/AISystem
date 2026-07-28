@@ -264,11 +264,15 @@ async def test_problem_description_still_gets_full_questioning(stage: Stage) -> 
         qualification(confidence=40),
         qualification(confidence=45),
         qualification(confidence=50),
+        qualification(confidence=60),
         qualification(status="warm", confidence=92, bot_response="Понимаю вас."),
     )
 
     await anna.start("referral")
     await anna.says("У меня год повторяется одна ситуация в отношениях")
+    assert anna.last == texts.QUESTION_DURATION
+
+    await anna.says("Около года")
     assert anna.last == texts.QUESTION_2
 
     await anna.says("Тревога и усталость")
@@ -284,8 +288,160 @@ async def test_problem_description_still_gets_full_questioning(stage: Stage) -> 
     assert not handed_off(anna), "тёплого клиента передали без признака готовности"
     assert stage.yulia.inbox == []
 
-    asked = [texts.QUESTION_2, texts.QUESTION_3, texts.QUESTION_4, texts.QUESTION_5]
+    asked = [
+        texts.QUESTION_DURATION,
+        texts.QUESTION_2,
+        texts.QUESTION_3,
+        texts.QUESTION_4,
+        texts.QUESTION_5,
+    ]
     assert [q for q in asked if q in anna.inbox] == asked, "вопросы заданы не все или не по одному"
+
+
+# ── Преждевременная передача после двух вопросов ──
+
+
+async def test_high_confidence_does_not_cut_the_question_chain(stage: Stage) -> None:
+    """Уверенность в статусе не заменяет собранную картину.
+
+    Живой прод 28.07: клиент отвечал дважды и получал «Я уже передал
+    информацию Юлии». Модель после двух реплик уверенно ставила warm 92%,
+    а условие достаточности считало высокий confidence признаком того, что
+    информации хватает. Это разные вещи: confidence измеряет уверенность
+    в статусе, а не полноту картины. FSM сценария B в ТЗ —
+    ``q1 → q2 → q3 → q4 → [q5]``, в скобках только пятый вопрос.
+    """
+    anna = stage.client()
+    stage.openai.script("scenario", scenario("B_problem"))
+    stage.openai.script("qualify", *[qualification(status="warm", confidence=95)] * 4)
+
+    await anna.start("telegram_channel")
+    await anna.says("Проблемы в отношениях")
+    await anna.says("Больше года")
+    await anna.says("Не можем найти общий язык")
+
+    assert not handed_off(anna), "передача после двух ответов — цепочка вопросов оборвана"
+    assert anna.last == texts.QUESTION_3, "третий вопрос не задан"
+    assert stage.yulia.inbox == []
+
+
+async def test_hot_without_signal_no_longer_ends_the_dialog_early(stage: Stage) -> None:
+    """«Горячий» без признака готовности не обрывает вопросы посреди сценария.
+
+    Правило понижения hot → warm ставило синтетический needs_yulia сразу,
+    и человек уходил Юлии недоспрошенным на втором вопросе. Пока вопросы
+    не заданы, правильный ответ не «передать», а «спросить дальше».
+    """
+    anna = stage.client()
+    stage.openai.script("scenario", scenario("B_problem"))
+    stage.openai.script(
+        "qualify",
+        *[qualification(status="hot", readiness_signal="none", confidence=92)] * 4,
+    )
+
+    await anna.start("site")
+    await anna.says("Всё держится на мне одном")
+    await anna.says("Года три")
+
+    assert not handed_off(anna), "выдуманная готовность оборвала квалификацию"
+    assert anna.last == texts.QUESTION_2
+
+
+async def test_named_readiness_signal_ends_the_chain_legitimately(stage: Stage) -> None:
+    """Названный признак готовности завершает цепочку законно.
+
+    Обратная сторона: человек, сказавший «хочу записаться» на втором
+    вопросе, не должен выслушивать оставшиеся три.
+    """
+    anna = stage.client()
+    stage.openai.script("scenario", scenario("B_problem"))
+    stage.openai.script(
+        "qualify",
+        qualification(status="hot", readiness_signal="booking", confidence=94),
+    )
+
+    await anna.start("site")
+    await anna.says("Ситуация повторяется который год")
+    await anna.says("Полгода, и я хочу записаться на диагностику")
+
+    assert handed_off(anna), "названный признак готовности проигнорирован"
+    assert texts.QUESTION_3 not in anna.inbox, "человека доспрашивали после просьбы записаться"
+    assert "🔥 ГОРЯЧИЙ ЛИД" in stage.yulia.last
+
+
+async def test_early_finish_still_applies_the_confidence_threshold(stage: Stage) -> None:
+    """Досрочное завершение не теряет порог 85%.
+
+    Цепочка обрывается на втором вопросе — человек попросил связаться лично.
+    Решение принимается по квалификации, запрошенной с final=False, и
+    финальные правила обязаны примениться и там: иначе неуверенный вывод
+    ушёл бы Юлии без пометки «требуется экспертная оценка».
+    """
+    anna = stage.client()
+    stage.openai.script("scenario", scenario("B_problem"))
+    stage.openai.script(
+        "qualify",
+        qualification(confidence=50),
+        qualification(status="warm", readiness_signal="personal_contact", confidence=60),
+    )
+
+    await anna.start("site")
+    await anna.says("Что-то идёт не так")
+    await anna.says("Давно")
+    await anna.says("Хочу поговорить с Юлией напрямую")
+
+    assert stage.yulia.inbox, "клиент ниже порога уверенности не дошёл до Юлии"
+    assert "ТРЕБУЕТСЯ ЭКСПЕРТНАЯ ОЦЕНКА" in stage.yulia.last
+    assert texts.QUESTION_3 not in anna.inbox, "просьбу о личном контакте проигнорировали"
+
+
+async def test_hot_without_signal_reaches_yulia_at_the_end_of_the_chain(stage: Stage) -> None:
+    """Понижение hot → warm не теряется: в конце цепочки Юлия всё равно решает.
+
+    Передача откладывается до конца вопросов, но не отменяется — иначе
+    правка против выдуманной готовности превратилась бы в потерю лида.
+    """
+    anna = stage.client()
+    stage.openai.script("scenario", scenario("B_problem"))
+    stage.openai.script(
+        "qualify",
+        *[qualification(status="hot", readiness_signal="none", confidence=92)] * 4,
+    )
+
+    await anna.start("site")
+    await anna.says("Всё держится на мне одном")
+    await anna.says("Года три")
+    await anna.says("Не успеваю ничего")
+    await anna.says("Пробовала нанимать людей")
+    await anna.says("Хочу выстроить систему")
+
+    assert handed_off(anna), "клиент с признаками интереса потерян"
+    assert "ТЁПЛЫЙ ЛИД" in stage.yulia.last
+    assert "о готовности записаться не говорил" in stage.yulia.last
+    assert stage.contact(anna)["status"] == "warm"
+
+
+async def test_duration_answer_reaches_yulias_card(stage: Stage) -> None:
+    """Ответ о давности ситуации виден в карточке.
+
+    Вопрос добавлен по просьбе Юлии 2026-07-28: повторяемость — один из
+    девяти признаков, которые AI обязан оценить, а судить о ней, не зная
+    срока, нельзя.
+    """
+    anna = stage.client()
+    stage.openai.script("scenario", scenario("B_problem"))
+    stage.openai.script(
+        "qualify",
+        qualification(confidence=50),
+        qualification(status="hot", readiness_signal="booking", confidence=95),
+    )
+
+    await anna.start("site")
+    await anna.says("Конфликты в команде повторяются")
+    await anna.says("Ровно два года")
+    await anna.says("Хочу записаться")
+
+    assert "Ровно два года" in stage.yulia.last, "давность ситуации не дошла до карточки"
 
 
 async def test_ready_client_still_reaches_yulia(stage: Stage) -> None:
