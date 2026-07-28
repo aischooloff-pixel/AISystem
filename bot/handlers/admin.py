@@ -12,6 +12,7 @@ from aiogram.filters import BaseFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
+from bot import texts
 from bot.config import Config
 from bot.handlers.questionnaire import send_questionnaire
 from bot.services import airtable
@@ -55,6 +56,7 @@ HELP = (
     "/stop {id} — завершить взаимодействие\n"
     "/note {id} {текст} — заметка\n"
     "/anketa {id} — отправить анкету «Точка сбоя» (/anketa_force — повторно)\n"
+    "/booked {id} — подтвердить клиенту, что он записан на диагностику\n"
     "/stats — статистика · /tasks — задачи · /hot — горячие\n"
     "/reload_knowledge — перечитать базу знаний\n/cancel — отменить правку ответа на комментарий\n"
     "/health — проверка систем"
@@ -193,6 +195,36 @@ async def _simple_update(
     await airtable.update_contact(contact["id"], updates)
     _log_action(message, action)
     await _reply(message, done_text)
+
+
+@router.message(F.text.startswith("/booked"))
+async def cmd_booked(message: Message, config: Config, bot: Bot) -> None:
+    """Подтверждение клиенту, что он записан на диагностику.
+
+    Юлия договорилась о встрече в личке — эта команда посылает клиенту
+    короткое подтверждение и приглашение прислать дополнительные детали
+    до встречи. Пишет в CRM касание.
+    """
+    if not _is_admin(message, config):
+        await _reply(message, "Команда недоступна.")
+        return
+    args = _args(message)
+    contact = await _contact_or_report(message, args)
+    if contact is None:
+        return
+    telegram_id = int(args[0])
+    name = contact.get("fields", {}).get("name") or "клиент"
+    try:
+        await bot.send_message(telegram_id, texts.BOOKED_CONFIRMATION)
+    except Exception:
+        logger.exception("Не удалось отправить подтверждение записи %s", telegram_id)
+        await _reply(message, f"Не удалось отправить сообщение {name}.")
+        return
+    await airtable.add_touch(
+        telegram_id, "status_change", "Юлия подтвердила запись на диагностику (/booked)"
+    )
+    _log_action(message, "booked")
+    await _reply(message, f"Подтверждение записи отправлено: {name}.")
 
 
 @router.message(F.text.startswith("/anketa_force"))
