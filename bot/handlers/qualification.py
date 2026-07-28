@@ -366,7 +366,18 @@ async def first_message(message: Message, state: FSMContext, bot: Bot, config: C
     )
     await airtable.update_contact(contact["id"], {"scenario": kind})
     await state.update_data(q1=message.text, scenario=kind)
+    await _route_scenario(kind, message, state, bot, config, contact)
 
+
+async def _route_scenario(
+    kind: str,
+    message: Message,
+    state: FSMContext,
+    bot: Bot,
+    config: Config,
+    contact: dict,
+) -> None:
+    """Ветвление по определённому сценарию (ТЗ, Блок 6 + разделы 8 и 11)."""
     if kind == "A_ready":
         await _send_bot_turn(message, contact, texts.A_INTRO)
         await state.set_state(Dialog.a_question_1)
@@ -374,8 +385,69 @@ async def first_message(message: Message, state: FSMContext, bot: Bot, config: C
         # Первое сообщение — уже ответ на вопрос 1 (его задало приветствие)
         await _send_bot_turn(message, contact, texts.QUESTION_2)
         await state.set_state(Dialog.b_question_2)
+    elif kind == "non_target":
+        await _close_non_target(message, state, bot, config, contact)
+    elif kind == "handoff":
+        await _handoff_immediately(message, state, bot, config, contact)
     else:  # C_info
         await _answer_info_question(message, state, bot, config, contact)
+
+
+async def _close_non_target(
+    message: Message, state: FSMContext, bot: Bot, config: Config, contact: dict
+) -> None:
+    """Нецелевое обращение: вежливо завершить, Юлию НЕ беспокоить.
+
+    ТЗ, «Маршрутизация после квалификации»: non_target → «корректно ответить ·
+    рекомендовать профильного специалиста · вежливо завершить · paused=true».
+    Карточки на «погода на завтра» Юлия получать не должна.
+
+    Вердикт детектора перепроверяется полной квалификацией: закрыть диалог
+    имеет право только уверенный вывод. Неуверенный (confidence < порога)
+    отправляется Юлии — «AI не уверен → передача» (ТЗ, Блок 6).
+    """
+    qualification = await get_ai().qualify(_history_from(contact), final=True)
+    if qualification is None:
+        await _ai_error(message, contact)
+        return
+    qualification.setdefault("scenario", "non_target")
+    if qualification.get("status") != "non_target":
+        # Квалификация не подтвердила вердикт детектора — доверяем ей:
+        # она видела весь диалог, детектор — одно сообщение
+        logger.info(
+            "Детектор: non_target, квалификация: %s — иду по квалификации",
+            qualification.get("status"),
+        )
+    await _finish(message, state, bot, config, contact, qualification)
+
+
+async def _handoff_immediately(
+    message: Message, state: FSMContext, bot: Bot, config: Config, contact: dict
+) -> None:
+    """Отказ говорить с ботом или просьба о живом человеке → сразу Юлии.
+
+    ТЗ, «Обработка возражений», особый случай: «Я не хочу разговаривать
+    с ботом» → немедленная передача. Никаких уговоров и никаких вопросов —
+    задавать их человеку, который просил живого собеседника, значит спорить
+    с ним.
+    """
+    qualification = await get_ai().qualify(_history_from(contact), final=False)
+    if qualification is None:
+        qualification = {
+            "summary": (message.text or "")[:300],
+            "key_phrases": [],
+            "status_reason": "Просит живого человека",
+            "confidence": 100,
+            "status": contact.get("fields", {}).get("status") or "warm",
+        }
+    qualification["needs_yulia"] = True
+    qualification.setdefault("needs_yulia_reason", "Просит живого человека, не хочет говорить с AI")
+    qualification["scenario"] = "handoff"
+    if qualification.get("status") == "non_target":
+        # Целевой человек, которому нужен живой собеседник, — не нецелевое
+        # обращение: иначе _finish закрыл бы диалог вместо передачи
+        qualification["status"] = "warm"
+    await _finish(message, state, bot, config, contact, qualification)
 
 
 async def _answer_info_question(
@@ -401,7 +473,15 @@ async def _answer_info_question(
                 "confidence": 0,
                 "scenario": "C_info",
             }
-        qualification["needs_yulia"] = True
+        # Передаём Юлии всё, КРОМЕ уверенно нецелевого. «Нет ответа в базе
+        # знаний» — законное основание передачи (ТЗ, раздел 11), но у вопроса
+        # про погоду ответа в базе знаний нет и не будет: до этой оговорки
+        # безусловное needs_yulia=True гнало Юлии каждое постороннее сообщение.
+        if not (
+            qualification.get("status") == "non_target"
+            and int(qualification.get("confidence") or 0) >= config.ai_confidence_threshold
+        ):
+            qualification["needs_yulia"] = True
         await _finish(message, state, bot, config, contact, qualification)
         return
     await _send_bot_turn(message, contact, answer["answer"])
@@ -560,18 +640,11 @@ async def c_message(message: Message, state: FSMContext, bot: Bot, config: Confi
         await _ai_error(message, contact)
         return
     kind = scenario["scenario"]
-    if kind == "A_ready":
+    if kind in ("A_ready", "B_problem"):
+        # Появился собственный запрос — переключаемся с C на рабочий сценарий
         await state.update_data(q1=message.text, scenario=kind)
         await airtable.update_contact(contact["id"], {"scenario": kind})
-        await _send_bot_turn(message, contact, texts.A_INTRO)
-        await state.set_state(Dialog.a_question_1)
-    elif kind == "B_problem":
-        await state.update_data(q1=message.text, scenario=kind)
-        await airtable.update_contact(contact["id"], {"scenario": kind})
-        await _send_bot_turn(message, contact, texts.QUESTION_2)
-        await state.set_state(Dialog.b_question_2)
-    else:
-        await _answer_info_question(message, state, bot, config, contact)
+    await _route_scenario(kind, message, state, bot, config, contact)
 
 
 # ── Свободный диалог после квалификации (warm/cold) ──

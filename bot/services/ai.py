@@ -57,6 +57,13 @@ class AIService:
     ) -> None:
         self.model = model
         self.confidence_threshold = confidence_threshold
+        # Заявленная в документации сменяемость модели через OPENAI_MODEL
+        # держалась на том, что все модели принимают temperature. Семейство
+        # gpt-5 (и рассуждающие o*) принимают только значение по умолчанию и
+        # отвечают 400 на 0.2 — смена модели молча убила бы бота целиком:
+        # каждый запрос в TECH_ERROR. Пробуем с температурой, а на отказ
+        # именно из-за неё переходим на умолчание и больше не пробуем.
+        self._send_temperature = True
         delays = retry_delays or (
             TIMEOUT_RETRY_DELAY,
             RATE_LIMIT_RETRY_DELAY,
@@ -98,9 +105,10 @@ class AIService:
         payload = {
             "model": self.model,
             "messages": messages,
-            "temperature": 0.2,
             "response_format": {"type": "json_object"},
         }
+        if self._send_temperature:
+            payload["temperature"] = 0.2
         # Логирование запроса полностью (ТЗ, Блок 1). Исключение — системный
         # промпт: в нём вся база знаний (~50К символов, одинакова в каждом
         # запросе), пишем только её размер; остальные реплики — целиком.
@@ -144,6 +152,21 @@ class AIService:
                     self._server_delay,
                 )
                 await asyncio.sleep(self._server_delay)
+                continue
+            if (
+                response.status_code == 400
+                and self._send_temperature
+                and "temperature" in response.text
+            ):
+                # Модель принимает только температуру по умолчанию — снимаем
+                # параметр и повторяем. Один раз за жизнь процесса: дальше
+                # запросы уходят уже без него.
+                self._send_temperature = False
+                payload.pop("temperature", None)
+                logger.info(
+                    "Модель %s не принимает temperature — перехожу на значение по умолчанию",
+                    self.model,
+                )
                 continue
             if response.status_code != 200:
                 logger.error(
@@ -284,6 +307,25 @@ class AIService:
                 data["needs_yulia_reason"] = (
                     "Правило смещения: признаки warm при высокой готовности и срочности"
                 )
+
+        if (
+            data.get("status") == "non_target"
+            and data["confidence"] >= self.confidence_threshold
+            and not data.get("needs_yulia_reason")
+        ):
+            # ТЗ, «Маршрутизация после квалификации»: нецелевое обращение
+            # завершается вежливым ответом и paused=true — Юлии оно не идёт.
+            # Модель, привыкшая к «при сомнениях передай», ставит needs_yulia
+            # и здесь; уверенный вердикт «вне компетенции» сомнением не
+            # является. Названную моделью причину передачи уважаем: она
+            # означает, что кроме нецелевого запроса в диалоге есть что-то
+            # ещё (агрессия, тяжёлая ситуация, просьба о человеке).
+            if data.get("needs_yulia"):
+                logger.info(
+                    "Уверенное нецелевое обращение (%d%%) — завершаю без передачи Юлии",
+                    int(data["confidence"]),
+                )
+            data["needs_yulia"] = False
 
         if final and data["confidence"] < self.confidence_threshold:
             # Порог 85% из «Критериев квалификации», п. 9: ниже — решает Юлия.

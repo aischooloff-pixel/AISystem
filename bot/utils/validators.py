@@ -138,7 +138,12 @@ def parse_ai_json(raw: str | None) -> dict | None:
 
 LEVELS = {"high", "medium", "low"}
 STATUSES = {"hot", "warm", "cold", "non_target"}
-SCENARIOS = {"A_ready", "B_problem", "C_info"}
+# Пять исходов, а не три: нецелевому обращению и отказу говорить с ботом
+# нужны собственные имена. Пока их не было, «погода на завтра» становилась
+# C_info, ответа в базе знаний не находилось — и мусорный лид уходил Юлии
+# (аудит 2026-07-28). «Вопрос по психиатрии» модель честно называла нецелевым,
+# а валидатор отвергал ответ целиком и слал клиенту техническую ошибку.
+SCENARIOS = {"A_ready", "B_problem", "C_info", "non_target", "handoff"}
 EMOTIONS = {"positive", "neutral", "negative", "interested"}
 PRODUCT_INTERESTS = {
     "diagnostics",

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 
 import httpx
 import pytest
@@ -197,8 +198,13 @@ async def test_detect_scenario_valid() -> None:
 
 
 async def test_scenario_prompt_contains_all_examples_from_spec() -> None:
-    """Примеры из таблицы ТЗ присутствуют в промпте — модель видит все образцы."""
-    prompt = build_scenario_prompt("тест")
+    """Примеры из таблицы ТЗ присутствуют в промпте — модель видит все образцы.
+
+    Сравнение по схлопнутым пробелам: промпт свёрстан по ширине строки, и
+    пример, перенесённый на следующую строку, модель видит целиком — падать
+    на этом тест не должен.
+    """
+    prompt = re.sub(r"\s+", " ", build_scenario_prompt("тест"))
     for example in (
         "Хочу записаться",
         "Сколько стоит?",
