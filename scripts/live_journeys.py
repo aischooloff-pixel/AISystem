@@ -19,6 +19,7 @@ from itertools import count
 import httpx
 from aiogram import Bot
 from aiogram.client.session.base import BaseSession
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.methods import AnswerCallbackQuery, EditMessageReplyMarkup, EditMessageText, SendMessage
 from aiogram.types import Chat, Message, Update, User
 
@@ -34,6 +35,22 @@ from tests.conftest import FakeAirtable
 
 ADMIN_ID = 999
 _ids = count(770_001)
+_dispatcher = None
+
+
+def get_dispatcher(config):
+    """Диспетчер один на процесс, хранилище FSM — своё на каждый прогон.
+
+    Роутеры aiogram — модульные синглтоны, второй ``create_dispatcher``
+    падает с «Router is already attached». А состояние между диалогами
+    течь не должно, иначе следующий клиент продолжит чужой разговор.
+    """
+    global _dispatcher
+    if _dispatcher is None:
+        _dispatcher = create_dispatcher(config)
+    _dispatcher["config"] = config
+    _dispatcher.fsm.storage = MemoryStorage()
+    return _dispatcher
 
 
 class Outbox(BaseSession):
@@ -174,8 +191,7 @@ async def run(name: str, plan: dict, config) -> bool:
         confidence_threshold=config.ai_confidence_threshold,
         timeout=120,
     )
-    dispatcher = create_dispatcher(config)
-    dispatcher["config"] = config
+    dispatcher = get_dispatcher(config)
     client = Client(dispatcher, bot, outbox, "Проба")
 
     print(f"\n{'=' * 74}\n{name.upper()}\nОжидание: {plan['expect']}\n{'-' * 74}")
