@@ -279,9 +279,14 @@ async def _finish(
             confidence_threshold=config.ai_confidence_threshold,
         )
         await _send_bot_turn(message, contact, texts.HANDOFF_MESSAGE)
-        # Нецелевому обращению рассказывать о диагностике незачем — его
-        # передают Юлии по другой причине
-        if status != "non_target":
+        # Рассказ о формате встречи уместен не всегда:
+        # · нецелевому обращению — незачем, его передают по другой причине;
+        # · человеку в остром состоянии («мне очень плохо, не вижу выхода») —
+        #   тем более: он написал о том, что ему плохо, а в ответ получил бы
+        #   описание онлайн-встречи на 60 минут. Ему нужен человек, а не
+        #   продукт; Юлия уже уведомлена.
+        crisis = qualification.get("handoff_trigger") == "heavy_situation"
+        if status != "non_target" and not crisis:
             await _send_bot_turn(message, contact, texts.HANDOFF_FOLLOWUP)
         await state.clear()
         return

@@ -84,8 +84,9 @@ class Outbox(BaseSession):
 class Client:
     """Один человек в Telegram: пишет боту и читает ответы."""
 
-    def __init__(self, dispatcher, bot: Bot, outbox: Outbox, name: str) -> None:
+    def __init__(self, dispatcher, bot: Bot, outbox: Outbox, name: str, admin_id: int) -> None:
         self.dp, self.bot, self.outbox = dispatcher, bot, outbox
+        self.admin_id = admin_id
         self.id = next(_ids)
         self.user = User(id=self.id, is_bot=False, first_name=name, username="probe")
         self._updates = count(1)
@@ -108,7 +109,10 @@ class Client:
 
     @property
     def yulia_got(self) -> list[str]:
-        return [m["text"] for m in self.outbox.messages if m["chat_id"] == ADMIN_ID]
+        """Что ушло Юлии. Адрес берётся из конфига, а не из константы:
+        карточка отправляется на её настоящий telegram_id, и проверка
+        «Юлию не побеспокоили» иначе не проверяла бы ничего."""
+        return [m["text"] for m in self.outbox.messages if m["chat_id"] == self.admin_id]
 
 
 # ── Сценарии: что пишет человек и что должно получиться ──
@@ -192,7 +196,7 @@ async def run(name: str, plan: dict, config) -> bool:
         timeout=120,
     )
     dispatcher = get_dispatcher(config)
-    client = Client(dispatcher, bot, outbox, "Проба")
+    client = Client(dispatcher, bot, outbox, "Проба", config.telegram_admin_id)
 
     print(f"\n{'=' * 74}\n{name.upper()}\nОжидание: {plan['expect']}\n{'-' * 74}")
     for reply in plan["replies"]:
@@ -224,12 +228,19 @@ async def run(name: str, plan: dict, config) -> bool:
     if plan["handoff"] is False and client.yulia_got:
         print("  ✗ ЮЛИЮ ПОБЕСПОКОИЛИ без основания")
         verdict = False
+    if plan["handoff"] is True and not client.yulia_got:
+        print("  ✗ КАРТОЧКА ЮЛИИ НЕ УШЛА, хотя клиент передан")
+        verdict = False
     if "null" in " ".join(said).lower().split():
         print("  ✗ КЛИЕНТ ПОЛУЧИЛ «null»")
         verdict = False
-    repeats = [q for q in said if said.count(q) > 1]
-    if repeats:
-        print(f"  ✗ ПОВТОР реплики: {repeats[0][:60]!r}")
+    # Одно повторение допустимо: ответив на вопрос о цене, бот возвращается
+    # к своему. Дефект — это когда бот кружит: одна и та же реплика трижды
+    # или две подряд (прод 29.07: четыре «что именно вас беспокоит?»).
+    circling = [q for q in said if said.count(q) > 2]
+    adjacent = [a for a, b in zip(said, said[1:]) if a == b]
+    if circling or adjacent:
+        print(f"  ✗ БОТ КРУЖИТ: {(circling or adjacent)[0][:60]!r}")
         verdict = False
     print("  ✓ ок" if verdict else "  ✗ есть замечания")
 

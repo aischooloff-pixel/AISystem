@@ -314,7 +314,9 @@ async def test_scenario_15_sensitive_info(monkeypatch, fake_ai, config):
     ]
     m = FakeMessage(make_user(), "Недавно пережила очень тяжёлое событие в семье...")
     await qual.b_answer_2(m, state, FakeBot(), config)
-    assert m.sent == [texts.HANDOFF_MESSAGE, texts.HANDOFF_FOLLOWUP]
+    # Рассказ о формате встречи в остром состоянии неуместен: человеку нужен
+    # человек, а не описание онлайн-встречи на 60 минут
+    assert m.sent == [texts.HANDOFF_MESSAGE]
     assert crm.contact["fields"]["assigned_to"] == "yulia"
 
 

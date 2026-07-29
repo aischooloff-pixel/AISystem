@@ -403,7 +403,8 @@ async def test_named_handoff_trigger_ends_the_chain_immediately(stage: Stage) ->
     await anna.says("Ситуация в семье очень тяжёлая")
     await anna.says("Полгода, и мне совсем плохо")
 
-    assert handed_off(anna), "тяжёлую ситуацию не передали немедленно"
+    assert anna.last == texts.HANDOFF_MESSAGE, "тяжёлую ситуацию не передали немедленно"
+    assert texts.HANDOFF_FOLLOWUP not in anna.inbox, "в кризисе рассказали про формат встречи"
     assert texts.QUESTION_2 not in anna.inbox, "человека доспрашивали в тяжёлом состоянии"
     assert stage.yulia.inbox
 
@@ -550,8 +551,11 @@ async def test_real_crisis_words_hand_off_immediately(stage: Stage) -> None:
     await anna.says("мне очень плохо, не вижу выхода")
     await anna.says("неделю")
 
-    assert handed_off(anna), "человека в остром состоянии продолжили доспрашивать"
-    assert texts.QUESTION_2 not in anna.inbox
+    assert anna.last == texts.HANDOFF_MESSAGE, "человека в остром состоянии не передали"
+    assert texts.QUESTION_2 not in anna.inbox, "в остром состоянии продолжили доспрашивать"
+    # Описание формата встречи сюда не идёт: человек написал, что ему плохо,
+    # и в ответ получил бы рассказ про онлайн-встречу на 60 минут
+    assert texts.HANDOFF_FOLLOWUP not in anna.inbox, "в кризисе рассказали про формат встречи"
     assert stage.yulia.inbox
 
 
