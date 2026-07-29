@@ -879,6 +879,25 @@ async def test_booking_request_still_hands_off(stage: Stage) -> None:
     assert handed_off(anna), "просьбу записаться не передали"
 
 
+async def test_booking_request_is_told_how_to_book(stage: Stage) -> None:
+    """«Хочу записаться» → бот говорит КАК записаться, потом уточняет.
+
+    Прод 29.07: ответ глотался вместе с флагом needs_yulia — модель ставит
+    его на просьбу записаться как на основание передачи, а код пропускал
+    ответ только при снятом флаге. Человек не узнавал порядок записи.
+    """
+    anna = stage.client()
+    howto = "Записаться можно через форму: t.me/m/... или напрямую Юлии."
+    stage.openai.script("scenario", scenario("A_ready"))
+    stage.openai.script("info", info_answer(howto, needs_yulia=True, reason="просит записаться"))
+    stage.openai.script("qualify", qualification(confidence=50))
+
+    await anna.says("хочу записаться на диагностику")
+
+    assert howto in anna.inbox, "не сказали, как записаться"
+    assert anna.inbox.index(howto) < anna.inbox.index(texts.A_INTRO)
+
+
 async def test_explicit_words_still_cut_below_the_floor(stage: Stage) -> None:
     """Пол не мешает услышать прямую просьбу клиента."""
     anna = stage.client()

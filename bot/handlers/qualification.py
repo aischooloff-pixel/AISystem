@@ -544,8 +544,13 @@ async def _route_scenario(
         # как записаться. И цену, и порядок записи бот называть вправе
         # («Продуктовая линейка»).
         answer = await get_ai().answer_info(message.text, history=_history_text(contact))
-        if answer and answer.get("answer") and not answer.get("needs_yulia"):
-            await _send_bot_turn(message, contact, answer["answer"])
+        text = (answer or {}).get("answer") or ""
+        # needs_yulia здесь не помеха: в сценарии A человек и так уйдёт Юлии
+        # в конце. Модель ставит флаг на «хочу записаться» как на основание
+        # передачи — и ответ о том, КАК записаться, глотался вместе с ним
+        # (прод 29.07). Отсекаем только заглушку «передам Юлии».
+        if text and text != texts.NEUTRAL_FALLBACK:
+            await _send_bot_turn(message, contact, text)
         await _send_bot_turn(message, contact, texts.A_INTRO)
         await state.set_state(Dialog.a_question_1)
     elif kind == "B_problem":
