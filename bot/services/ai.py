@@ -271,6 +271,23 @@ class AIService:
 
         self._verify_handoff_trigger(data, conversation)
 
+        # Передача требует ПОДТВЕРЖДЁННОГО основания, а не флага модели.
+        # Промпт велит ей передавать «при любом основании», и в том списке
+        # есть «AI не уверен» и «сложный запрос» — она ставит needs_yulia
+        # почти всегда. Живой прогон 29.07: тёплый клиент с confidence 85
+        # после четырёх ответов всё равно получал «Передал информацию Юлии»
+        # вместо ответа по существу. Ниже флаг взводят только правила ТЗ:
+        # порог 85%, стоп-фраза, горячий без признака, названное основание.
+        if data.get("needs_yulia") and data.get("handoff_trigger") in (None, "none"):
+            logger.info(
+                "needs_yulia без подтверждённого основания (%s) — снимаю, решаю по правилам",
+                data.get("needs_yulia_reason") or "причина не названа",
+            )
+            data["needs_yulia"] = False
+            data["needs_yulia_reason"] = None
+        elif data.get("handoff_trigger") not in (None, "none"):
+            data["needs_yulia"] = True
+
         if data.get("readiness_signal") in (None, "none"):
             # «Критерии квалификации» определяют и статус, и обе оси через
             # наблюдаемые признаки: горячий — просит записаться / спрашивает
@@ -381,14 +398,26 @@ class AIService:
         quote = data.get("handoff_quote")
         haystack = validators.normalize_for_match(client_text)
         needle = validators.normalize_for_match(quote) if isinstance(quote, str) else ""
-        if needle and needle in haystack:
+        if not needle or needle not in haystack:
+            logger.info(
+                "Основание передачи %r не подтверждено словами клиента (цитата: %r) — снимаю",
+                trigger,
+                quote,
+            )
+            data["handoff_trigger"] = "none"
             return
-        logger.info(
-            "Основание передачи %r не подтверждено словами клиента (цитата: %r) — снимаю",
-            trigger,
-            quote,
-        )
-        data["handoff_trigger"] = "none"
+        if trigger == "heavy_situation" and not validators.find_crisis_marker(client_text):
+            # ТЗ, раздел 11: тяжёлая ситуация → немедленная передача. Но
+            # оценке модели здесь верить нельзя — практика Юлии вся про
+            # трудные темы, и «выгорание» с «тревогой» прилетали как кризис.
+            # Признаём острое состояние только словами самого человека.
+            logger.info("heavy_situation без слов острого состояния — снимаю основание")
+            data["handoff_trigger"] = "none"
+            return
+        if trigger in validators.INFERRED_HANDOFF_TRIGGERS:
+            # Оценка модели, а не слова клиента: квалификацию не обрывает,
+            # но Юлия о ней узнает — флаг ставится, карточка придёт в конце
+            logger.info("Основание %r — оценка модели: продолжаю вопросы", trigger)
 
     def finalize(self, data: dict) -> dict:
         """Пост-правила, применимые только когда решение принимается.

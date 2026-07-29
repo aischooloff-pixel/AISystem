@@ -181,6 +181,8 @@ async def test_named_reason_keeps_non_target_going_to_yulia(stage: Stage) -> Non
             confidence=95,
             needs_yulia=True,
             needs_yulia_reason="Агрессия в адрес Юлии, нужна её реакция",
+            handoff_trigger="conflict",
+            handoff_quote="шарлатанство",
             bot_response=CLOSING,
         ),
     )
@@ -626,6 +628,64 @@ async def test_four_answers_are_collected_before_any_verdict(
     assert data.get("paused") is not True or handed_off(anna)
     questions = [m for m in anna.inbox if m.endswith("?")]
     assert len(questions) >= 4, f"{label}: задано {len(questions)} вопросов вместо четырёх"
+
+
+async def test_warm_client_gets_an_answer_not_the_handoff_template(stage: Stage) -> None:
+    """Тёплый клиент в конце цепочки получает ответ по существу.
+
+    Требование заказчика 29.07: «перевожу вас на Юлию» — только для
+    горячего. Модель ставила needs_yulia почти на всё (промпт велит
+    передавать «при любом основании», а там есть «AI не уверен»), и тёплый
+    клиент после четырёх ответов всё равно упирался в шаблон передачи.
+    Передача теперь требует подтверждённого основания.
+    """
+    anna = stage.client()
+    answer = "Понимаю вас. Обычно в таких случаях первым шагом становится диагностика."
+    stage.openai.script("scenario", scenario("B_problem"))
+    stage.openai.script(
+        "qualify",
+        *[
+            qualification(
+                status="warm",
+                confidence=90,
+                readiness_signal="none",
+                handoff_trigger="none",
+                needs_yulia=True,  # свободный флаг модели
+                needs_yulia_reason="На всякий случай пусть посмотрит Юлия",
+                bot_response=answer,
+            )
+        ]
+        * 5,
+    )
+
+    await anna.says("проблемы в семье")
+    for reply in ("больше года", "упрёки и молчание", "ходили к психологу", "хочу это прекратить"):
+        await anna.says(reply)
+
+    assert anna.last == answer, "тёплый клиент получил шаблон передачи вместо ответа"
+    assert texts.HANDOFF_MESSAGE not in anna.inbox
+    assert stage.yulia.inbox == [], "Юлию побеспокоили без основания"
+    fields = stage.contact(anna)
+    assert fields["status"] == "warm"
+    assert fields.get("paused") is not True, "разговор с тёплым клиентом закрыт"
+
+
+async def test_low_confidence_still_reaches_yulia_at_the_end(stage: Stage) -> None:
+    """Порог 85% остаётся основанием передачи (ТЗ, п. 9)."""
+    anna = stage.client()
+    stage.openai.script("scenario", scenario("B_problem"))
+    stage.openai.script(
+        "qualify",
+        *[qualification(status="warm", confidence=60, handoff_trigger="none")] * 5,
+    )
+
+    await anna.says("проблемы в семье")
+    # Уверенности не хватает — задаётся и пятый вопрос, условный по ТЗ
+    for reply in ("больше года", "упрёки", "ходили к психологу", "хочу прекратить", "сейчас тяжело"):
+        await anna.says(reply)
+
+    assert stage.yulia.inbox, "неуверенная квалификация не дошла до Юлии"
+    assert "ЭКСПЕРТНАЯ ОЦЕНКА" in stage.yulia.last.upper()
 
 
 async def test_explicit_words_still_cut_below_the_floor(stage: Stage) -> None:
