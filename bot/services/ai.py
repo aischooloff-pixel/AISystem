@@ -336,6 +336,10 @@ class AIService:
             )
             data["bot_response"] = texts.NEUTRAL_FALLBACK
             data["needs_yulia"] = True
+            # Решение кода, а не модели: квалификацию оно обрывает всегда.
+            # Продолжать разговор, в котором AI уже нарушил запрет бренда,
+            # нельзя — дальше человека ведёт Юлия.
+            data["_forced_handoff"] = True
             if not data.get("needs_yulia_reason"):
                 data["needs_yulia_reason"] = f"Стоп-фраза в ответе AI: {stop_phrase}"
 

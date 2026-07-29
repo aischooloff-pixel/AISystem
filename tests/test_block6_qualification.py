@@ -313,7 +313,10 @@ async def test_immediate_handoff_trigger_mid_flow(monkeypatch, fake_ai, config):
 
     fake_ai.qualifications = [
         valid_qualification(
-            needs_yulia=True, needs_yulia_reason="просит связаться лично", confidence=95
+            needs_yulia=True,
+            needs_yulia_reason="просит связаться лично",
+            handoff_trigger="personal_contact",
+            confidence=95,
         )
     ]
     m = FakeMessage(make_user(), "Свяжите меня с Юлией, пожалуйста")

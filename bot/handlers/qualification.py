@@ -345,6 +345,7 @@ async def _intermediate_step(
         if not qualification.get("needs_yulia_reason"):
             qualification["needs_yulia_reason"] = "Требуется экспертная оценка"
     signal = qualification.get("readiness_signal")
+    trigger = qualification.get("handoff_trigger")
     # Уверенность закрывает только пятый вопрос — единственный, который ТЗ
     # ставит в скобки («только если информации недостаточно»). Раньше это же
     # условие закрывало и вопросы 3–4, и разговор обрывался на втором.
@@ -352,8 +353,20 @@ async def _intermediate_step(
         next_question is texts.QUESTION_5
         and int(qualification.get("confidence") or 0) >= config.ai_confidence_threshold
     )
+    # needs_yulia сюда намеренно не входит. Это свободное суждение модели,
+    # и промпт велит ей передавать в том числе «когда AI не уверен» — при
+    # двух репликах она не уверена всегда. Живой прод 28.07: «хочу увеличить
+    # доход» → warm, confidence 85, признака готовности нет, needs_yulia=true —
+    # и человек уходил Юлии после одного вопроса. Обрывают цепочку только
+    # наблюдаемые события; неуверенность учитывает порог 85% в finalize().
+    if not trigger and qualification.get("needs_yulia"):
+        logger.info(
+            "needs_yulia без названного основания — продолжаю квалификацию (причина: %s)",
+            qualification.get("needs_yulia_reason") or "не названа",
+        )
     enough = (
-        qualification.get("needs_yulia")
+        qualification.get("_forced_handoff")  # стоп-фраза: решение кода, не модели
+        or (trigger not in (None, "none"))
         or (signal not in (None, "none"))
         or qualification.get("status") == "non_target"
         or confident_enough_for_last

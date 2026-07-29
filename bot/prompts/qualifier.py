@@ -20,6 +20,7 @@ QUALIFICATION_JSON_FORMAT = """{
   "confidence": 92,
   "readiness_signal": "booking|price_and_dates|payment|personal_contact|explicit_confirmation|deadline|none",
   "request_category": "отношения|денежные сценарии|самоценность|границы|внутренняя устойчивость|профессиональные изменения|бизнес и управление|делегирование|масштабирование|переход от ручного управления к системной модели|другое",
+  "handoff_trigger": "personal_contact|booking_or_price|support_question|payment_ready|heavy_situation|negative_to_ai|conflict|b2b|education|beyond_knowledge|none",
   "next_action": "Рекомендованный следующий шаг",
   "needs_yulia": true,
   "needs_yulia_reason": "Причина передачи или null",
@@ -40,6 +41,19 @@ QUALIFICATION_PROMPT_TEMPLATE = """Проведи квалификацию кл�
   готовности → hot;
 - немедленная передача Юлии (needs_yulia=true) при любом основании из
   раздела «Основания передачи Юлии»;
+- handoff_trigger — какое НАБЛЮДАЕМОЕ основание передачи прозвучало в
+  диалоге: personal_contact — просит личное общение с Юлией;
+  booking_or_price — хочет записаться или спрашивает стоимость;
+  support_question — спрашивает о сопровождении; payment_ready — готов
+  оплатить; heavy_situation — ситуация эмоционально тяжёлая; negative_to_ai —
+  негативная реакция на AI или отказ говорить с ботом; conflict — конфликт;
+  b2b — запрос от компании; education — обучение, партнёрство, работа в ITC;
+  beyond_knowledge — задан вопрос, ответа на который нет в базе знаний.
+  Ничего из этого не прозвучало — none;
+- «мне не хватает информации» и «случай кажется сложным» основаниями НЕ
+  являются: это твоя неуверенность, а не событие в диалоге. Ставь none
+  и продолжай задавать вопросы — недостаток уверенности учтёт порог 85%
+  в конце квалификации;
 - readiness_signal — какой из признаков горячего клиента прозвучал ДОСЛОВНО
   («Критерии квалификации», раздел «Горячий клиент»): booking — просит
   записаться; price_and_dates — спрашивает стоимость или ближайшие даты;

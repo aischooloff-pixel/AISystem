@@ -171,6 +171,26 @@ READINESS_SIGNALS = {
     "none",
 }
 
+# Основания немедленной передачи (ТЗ, раздел 11) — только НАБЛЮДАЕМЫЕ события.
+# Намеренно отсутствуют «AI не уверен» и «сложный запрос»: это суждения, а не
+# события, и модель выносит их при любой нехватке информации. Живой прод
+# 28.07: на «хочу увеличить доход» модель вернула needs_yulia=true с
+# confidence 85 — и человек уходил Юлии после одного вопроса. Нехватку
+# информации закрывает порог 85% в конце цепочки, а не обрыв квалификации.
+HANDOFF_TRIGGERS = {
+    "personal_contact",  # просит личное общение с Юлией
+    "booking_or_price",  # хочет записаться или спрашивает стоимость
+    "support_question",  # спрашивает о сопровождении
+    "payment_ready",  # готов оплатить
+    "heavy_situation",  # эмоционально тяжёлая ситуация
+    "negative_to_ai",  # негативная реакция на AI, не хочет говорить с ботом
+    "conflict",  # конфликт
+    "b2b",  # любой B2B-запрос
+    "education",  # обучение, партнёрство, работа в ITC
+    "beyond_knowledge",  # вопрос за пределами базы знаний
+    "none",
+}
+
 # Тема запроса — «Возможные направления» из продуктовой линейки Юлии.
 # Берём её словарь, а не свой: статистика должна складываться в те же
 # категории, которыми она описывает практику.
@@ -257,6 +277,8 @@ def validate_qualification(data: dict) -> list[str]:
         _check_enum(data, "readiness_signal", READINESS_SIGNALS, problems)
     if "request_category" in data and data["request_category"] is not None:
         _check_enum(data, "request_category", REQUEST_CATEGORIES, problems)
+    if "handoff_trigger" in data and data["handoff_trigger"] is not None:
+        _check_enum(data, "handoff_trigger", HANDOFF_TRIGGERS, problems)
     if "confidence" in data:
         _check_confidence(data, problems)
     if "needs_yulia" in data and not isinstance(data["needs_yulia"], bool):

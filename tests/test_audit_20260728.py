@@ -325,6 +325,85 @@ async def test_high_confidence_does_not_cut_the_question_chain(stage: Stage) -> 
     assert stage.yulia.inbox == []
 
 
+@pytest.mark.parametrize(
+    ("first", "second", "conf"),
+    [
+        # Дословно из прода 28.07 — три диалога, три преждевременные передачи
+        ("Хочу улушить свою внешность", "Неделю", 75),
+        ("Я хочу увеличить доход в своем проекте", "Какая именно", 85),
+        ("Проблемы в отношениях", "Не можем найти общий язык", 92),
+    ],
+)
+async def test_models_needs_yulia_alone_does_not_end_the_chain(
+    stage: Stage, first: str, second: str, conf: int
+) -> None:
+    """Свободный флаг модели не обрывает квалификацию.
+
+    Живой прод 28.07: модель возвращала needs_yulia=true с
+    readiness_signal=none почти в каждом диалоге — промпт велит ей
+    передавать «при любом основании», а в том списке есть «AI не уверен»
+    и «сложный запрос». При двух репликах она не уверена всегда, и человек
+    уходил Юлии после одного вопроса по любой теме.
+
+    Передачу теперь открывает НАЗВАННОЕ наблюдаемое основание
+    (``handoff_trigger``), а не суждение. Неуверенность учитывает порог 85%
+    в конце цепочки.
+    """
+    anna = stage.client()
+    stage.openai.script("scenario", scenario("B_problem"))
+    stage.openai.script(
+        "qualify",
+        *[
+            qualification(
+                status="warm",
+                confidence=conf,
+                readiness_signal="none",
+                handoff_trigger="none",
+                needs_yulia=True,
+                needs_yulia_reason="Требуется экспертная оценка ситуации",
+            )
+        ]
+        * 3,
+    )
+
+    await anna.start("telegram_channel")
+    await anna.says(first)
+    await anna.says(second)
+
+    assert not handed_off(anna), f"«{first}» → передача после одного вопроса"
+    assert anna.last == texts.QUESTION_2, "второй вопрос не задан"
+    assert stage.yulia.inbox == [], "Юлия получила недоспрошенного клиента"
+
+
+async def test_named_handoff_trigger_ends_the_chain_immediately(stage: Stage) -> None:
+    """Названное основание передачи работает с любого шага.
+
+    Обратная сторона: тяжёлая ситуация, просьба о человеке, конфликт и B2B
+    обязаны уводить к Юлии немедленно — доспрашивать в таких случаях нельзя.
+    """
+    anna = stage.client()
+    stage.openai.script("scenario", scenario("B_problem"))
+    stage.openai.script(
+        "qualify",
+        qualification(
+            status="warm",
+            confidence=90,
+            readiness_signal="none",
+            handoff_trigger="heavy_situation",
+            needs_yulia=True,
+            needs_yulia_reason="Эмоционально тяжёлая ситуация",
+        ),
+    )
+
+    await anna.start("telegram_dm")
+    await anna.says("Ситуация в семье очень тяжёлая")
+    await anna.says("Полгода, и мне совсем плохо")
+
+    assert handed_off(anna), "тяжёлую ситуацию не передали немедленно"
+    assert texts.QUESTION_2 not in anna.inbox, "человека доспрашивали в тяжёлом состоянии"
+    assert stage.yulia.inbox
+
+
 async def test_hot_without_signal_no_longer_ends_the_dialog_early(stage: Stage) -> None:
     """«Горячий» без признака готовности не обрывает вопросы посреди сценария.
 

@@ -103,7 +103,11 @@ async def test_scenario_04_asks_for_yulia(monkeypatch, fake_ai, config):
     state = make_state()
     await state.set_state(Dialog.b_question_3)
     fake_ai.qualifications = [
-        valid_qualification(needs_yulia=True, needs_yulia_reason="просит личное общение")
+        valid_qualification(
+            needs_yulia=True,
+            needs_yulia_reason="просит личное общение",
+            handoff_trigger="personal_contact",
+        )
     ]
     m = FakeMessage(make_user(), "Можно поговорить с Юлией лично?")
     await qual.b_answer_3(m, state, FakeBot(), config)
@@ -265,7 +269,11 @@ async def test_scenario_13_refuses_bot(monkeypatch, fake_ai, config):
     state = make_state()
     await state.set_state(Dialog.b_question_2)
     fake_ai.qualifications = [
-        valid_qualification(needs_yulia=True, needs_yulia_reason="не хочет говорить с ботом")
+        valid_qualification(
+            needs_yulia=True,
+            needs_yulia_reason="не хочет говорить с ботом",
+            handoff_trigger="negative_to_ai",
+        )
     ]
     m = FakeMessage(make_user(), "Я не хочу разговаривать с ботом")
     await qual.b_answer_2(m, state, FakeBot(), config)
@@ -297,6 +305,7 @@ async def test_scenario_15_sensitive_info(monkeypatch, fake_ai, config):
         valid_qualification(
             needs_yulia=True,
             needs_yulia_reason="эмоционально тяжёлая ситуация",
+            handoff_trigger="heavy_situation",
             summary="Клиент сообщил о тяжёлой личной ситуации (без деталей).",
         )
     ]

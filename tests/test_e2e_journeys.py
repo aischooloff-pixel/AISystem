@@ -869,14 +869,17 @@ async def test_repeat_start_mid_dialog_does_not_reset_the_conversation(stage: St
     assert anna.last == texts.QUESTION_2, "диалог продолжился не с того места"
 
 
-async def test_client_handed_over_gets_one_answer_then_silence(stage: Stage) -> None:
-    """Переданный Юлии клиент: сообщения сохраняются, AI молчит.
+async def test_client_handed_over_keeps_a_reference_assistant(stage: Stage) -> None:
+    """Переданный Юлии клиент получает справки, но не квалификацию.
 
-    «Ответить один раз» — иначе на каждое сообщение прилетало бы одно и то же.
+    Решение Юлии 2026-07-29: до её подключения бот остаётся ассистентом и
+    отвечает на организационные вопросы по базе знаний. Останавливается
+    именно воронка — статус не меняется, передача не повторяется.
     """
     anna = stage.client()
     stage.openai.script("scenario", scenario("A_ready"))
     stage.openai.script("qualify", qualification(status="hot", confidence=96))
+    stage.openai.script("info", info_answer("Диагностика длится до 60 минут."))
 
     await anna.start("site")
     await anna.says("Хочу записаться")
@@ -884,14 +887,45 @@ async def test_client_handed_over_gets_one_answer_then_silence(stage: Stage) -> 
     await anna.says("Хочу роста")
     handed_over = len(anna.inbox)
 
-    await anna.says("Есть новости?")
-    await anna.says("Ещё раз здравствуйте")
+    await anna.says("А сколько длится диагностика?")
 
     new_messages = anna.inbox[handed_over:]
-    assert new_messages == [texts.ALREADY_WITH_YULIA], "клиент получил лишние ответы"
-    assert stage.openai.queues["qualify"] == [], "AI запускался для переданного клиента"
-    forwarded = [m for m in stage.yulia.inbox if "написал(а): Есть новости?" in m]
+    assert new_messages == ["Диагностика длится до 60 минут."], "справка не дана"
+    assert texts.HANDOFF_MESSAGE not in new_messages, "передача повторилась"
+    assert texts.HANDOFF_FOLLOWUP not in new_messages, "описание диагностики повторилось"
+    assert stage.openai.queues["qualify"] == [], "квалификация запускалась повторно"
+    forwarded = [m for m in stage.yulia.inbox if "написал(а): А сколько длится" in m]
     assert forwarded, "сообщение переданного клиента не переслано Юлии"
+
+    fields = stage.contact(anna)
+    assert fields["status"] == "hot" and fields["paused"] is True
+
+
+async def test_handed_over_client_without_a_question_is_told_once(stage: Stage) -> None:
+    """Не вопрос, а дополнение: подтверждаем приём, не повторяя передачу."""
+    anna = stage.client()
+    stage.openai.script("scenario", scenario("A_ready"))
+    stage.openai.script("qualify", qualification(status="hot", confidence=96))
+    # На реплику без вопроса база знаний ответа не даёт
+    stage.openai.script(
+        "info",
+        info_answer("", needs_yulia=True, reason="не вопрос"),
+        info_answer("", needs_yulia=True, reason="не вопрос"),
+    )
+
+    await anna.start("site")
+    await anna.says("Хочу записаться")
+    await anna.says("Проблемы в бизнесе")
+    await anna.says("Хочу роста")
+    handed_over = len(anna.inbox)
+
+    await anna.says("Забыла сказать: команда из пяти человек")
+    await anna.says("И ещё филиал в другом городе")
+
+    new_messages = anna.inbox[handed_over:]
+    assert new_messages == [texts.ALREADY_WITH_YULIA, texts.INFO_PASSED_TO_YULIA]
+    assert texts.HANDOFF_MESSAGE not in new_messages, "передача повторилась"
+    assert len([m for m in stage.yulia.inbox if "написал(а)" in m]) == 2
 
 
 async def test_repeat_start_after_handoff_does_not_restart_automation(stage: Stage) -> None:

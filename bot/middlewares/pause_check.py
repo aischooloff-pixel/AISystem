@@ -1,12 +1,20 @@
-"""Middleware полной остановки автоматики (Блок 7).
+"""Middleware остановки квалификации после передачи (Блок 7).
 
 ТЗ Юлии, п. 6: «После передачи автоматическая коммуникация с человеком
-останавливается, пока я вручную не выберу новый маршрут».
+останавливается, пока я вручную не выберу новый маршрут». Останавливается
+именно КВАЛИФИКАЦИЯ: бот больше не ведёт человека по воронке, не меняет
+статус и не передаёт его повторно.
+
+Решением Юлии от 2026-07-29 бот при этом остаётся справочным ассистентом:
+на организационный вопрос («что такое диагностика», «сколько длится»,
+«что взять с собой») он отвечает по базе знаний, пока Юлия не подключилась.
+До этого любой вопрос после передачи упирался в «Юлия уже знает о вашем
+обращении» и разговор выглядел оборванным.
 
 Выполняется до всех хендлеров. Для клиента с ``paused`` или
 ``assigned_to=yulia``: сообщение сохраняется (история + касание), Юлия
-уведомляется, клиент один раз получает «Юлия уже знает...», обработка
-прерывается — AI не запускается.
+уведомляется, клиент получает ответ по базе знаний, обработка прерывается —
+квалификация не запускается.
 """
 
 from __future__ import annotations
@@ -21,6 +29,7 @@ from aiogram.types import Message, TelegramObject
 from bot import texts
 from bot.config import Config
 from bot.services import airtable
+from bot.services.ai import get_ai
 from bot.services.notifier import notify_yulia
 from bot.states import QUESTIONNAIRE_STATE_PREFIX
 from bot.utils.helpers import automation_stopped
@@ -84,40 +93,79 @@ class PauseCheckMiddleware(BaseMiddleware):
             await notify_yulia(
                 bot, self.config.telegram_admin_id, f"{name} написал(а): {text[:1000]}"
             )
-        # «Ответить один раз»: повторные сообщения сохраняем молча
-        already_notified = False
-        if state is not None:
-            state_data = await state.get_data()
-            already_notified = bool(state_data.get("paused_notice_sent"))
-        if not already_notified:
-            try:
-                await event.answer(texts.ALREADY_WITH_YULIA)
-            except Exception:
-                logger.exception("Не удалось ответить переданному клиенту")
-            if state is not None:
-                await state.update_data(paused_notice_sent=True)
+        await self._reply_as_assistant(event, contact, text, state)
         logger.info(
-            "pause_check: сообщение клиента %s сохранено, автоматика не запущена",
+            "pause_check: сообщение клиента %s сохранено, квалификация не запущена",
             event.from_user.id,
         )
-        return None  # обработка прервана
+        return None  # квалификация не запускается
+
+    async def _reply_as_assistant(self, event: Message, contact: dict, text: str, state) -> None:
+        """Ответ справочного ассистента переданному клиенту.
+
+        Отвечает по базе знаний и НИЧЕГО больше: статус не меняется,
+        квалификация не запускается, передача не повторяется. Сообщение
+        «Юлия уже знает о вашем обращении» остаётся, но только один раз
+        и только когда отвечать по существу нечего.
+        """
+        answer_text = texts.ALREADY_WITH_YULIA
+        try:
+            history = _history_text(contact)
+            answer = await get_ai().answer_info(text, history=history)
+        except Exception:
+            logger.exception("Справочный ответ переданному клиенту не получен")
+            answer = None
+
+        if answer is not None and not answer.get("needs_yulia") and answer.get("answer"):
+            # Ответ нашёлся в базе знаний — человек получает его сразу,
+            # не дожидаясь Юлии
+            answer_text = answer["answer"]
+        else:
+            # Ответа нет: либо это не вопрос, либо базы знаний не хватило.
+            # Передавать повторно нечего — клиент уже у Юлии.
+            already_notified = False
+            if state is not None:
+                state_data = await state.get_data()
+                already_notified = bool(state_data.get("paused_notice_sent"))
+            if already_notified:
+                answer_text = texts.INFO_PASSED_TO_YULIA
+            elif state is not None:
+                await state.update_data(paused_notice_sent=True)
+
+        try:
+            await event.answer(answer_text)
+        except Exception:
+            logger.exception("Не удалось ответить переданному клиенту")
+        await self._store_message(contact, answer_text, role="bot")
 
     @staticmethod
-    async def _store_message(contact: dict, text: str) -> None:
-        raw = contact.get("fields", {}).get("conversation_history") or "[]"
-        try:
-            history = json.loads(raw)
-            if not isinstance(history, list):
-                history = []
-        except (json.JSONDecodeError, TypeError):
-            history = []
+    async def _store_message(contact: dict, text: str, role: str = "client") -> None:
+        history = _parse_history(contact)
         history.append(
             {
-                "role": "client",
+                "role": role,
                 "text": text,
                 "date": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             }
         )
-        await airtable.update_contact(
-            contact["id"], {"conversation_history": json.dumps(history, ensure_ascii=False)}
-        )
+        serialized = json.dumps(history, ensure_ascii=False)
+        # Локальную копию тоже обновляем: в одном апдейте пишутся и реплика
+        # клиента, и ответ бота, и вторая запись не должна затереть первую
+        contact.setdefault("fields", {})["conversation_history"] = serialized
+        await airtable.update_contact(contact["id"], {"conversation_history": serialized})
+
+
+def _parse_history(contact: dict) -> list[dict]:
+    raw = contact.get("fields", {}).get("conversation_history") or "[]"
+    try:
+        history = json.loads(raw)
+        return history if isinstance(history, list) else []
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
+def _history_text(contact: dict) -> str:
+    """Последние реплики для контекста справочного ответа."""
+    return "\n".join(
+        f"{turn.get('role')}: {turn.get('text')}" for turn in _parse_history(contact)[-10:]
+    )

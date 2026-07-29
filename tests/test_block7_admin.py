@@ -232,15 +232,23 @@ async def make_middleware_call(monkeypatch, config, crm_fields, user_id=CLIENT_I
 
 
 async def test_middleware_stops_automation_for_paused(monkeypatch, config):
-    """Критерий: middleware полностью останавливает автоматику; сообщение
-    сохраняется и пересылается Юлии."""
+    """Критерий: middleware останавливает квалификацию; сообщение сохраняется
+    и пересылается Юлии.
+
+    AI-сервис здесь не поднят — справочный ответ получить неоткуда, и бот
+    честно отвечает «Юлия уже знает». Заодно проверяется, что недоступность
+    модели не роняет обработку сообщения переданного клиента.
+    """
     crm, bot, message, state, handler_called, result = await make_middleware_call(
         monkeypatch, config, {"paused": True, "name": "Анна"}
     )
-    assert handler_called == []  # хендлеры не выполнялись
+    assert handler_called == []  # квалификация не запускалась
     assert message.sent == [texts.ALREADY_WITH_YULIA]
     history = json.loads(crm.contact["fields"]["conversation_history"])
-    assert history[-1]["text"] == "Здравствуйте, есть новости?"
+    assert [turn["text"] for turn in history] == [
+        "Здравствуйте, есть новости?",
+        texts.ALREADY_WITH_YULIA,
+    ], "переписка после передачи пишется не целиком"
     assert any(t[0] == "dm_start" for t in crm.touches)
     assert bot.sent and "Анна написал(а)" in bot.sent[0][1]
 
@@ -262,11 +270,14 @@ async def test_middleware_replies_only_once(monkeypatch, config):
     m2 = FakeMessage(CLIENT_ID, "Второе")
     await middleware(handler, m2, {"bot": bot, "state": state})
 
+    # «Юлия уже знает» — один раз; дальше подтверждаем приём дополнений,
+    # но передачу не повторяем (решение Юлии 2026-07-29)
     assert m1.sent == [texts.ALREADY_WITH_YULIA]
-    assert m2.sent == []  # «ответить один раз»
-    # Но оба сообщения сохранены и пересланы Юлии
+    assert m2.sent == [texts.INFO_PASSED_TO_YULIA]
+    assert texts.HANDOFF_MESSAGE not in m2.sent
+    # Оба сообщения сохранены вместе с ответами и пересланы Юлии
     history = json.loads(crm.contact["fields"]["conversation_history"])
-    assert len(history) == 2
+    assert [turn["role"] for turn in history] == ["client", "bot", "client", "bot"]
     assert len(bot.sent) == 2
 
 
