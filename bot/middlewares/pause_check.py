@@ -32,7 +32,7 @@ from bot.services import airtable
 from bot.services.ai import get_ai
 from bot.services.notifier import notify_yulia
 from bot.states import QUESTIONNAIRE_STATE_PREFIX
-from bot.utils.helpers import automation_stopped
+from bot.utils.helpers import automation_stopped, status_locked_by_yulia
 from bot.utils.logger import get_app_logger
 
 logger = get_app_logger()
@@ -78,6 +78,10 @@ class PauseCheckMiddleware(BaseMiddleware):
         if not automation_stopped(fields):
             return await handler(event, data)
 
+        if await self._reopened_after_non_target(contact, fields):
+            # Человек вернулся с новым запросом — говорим с ним заново
+            return await handler(event, data)
+
         # Клиент у Юлии: сообщение не теряется, AI не отвечает
         text = event.text or event.caption or f"<{event.content_type.value}>"
         await self._store_message(contact, text)
@@ -99,6 +103,42 @@ class PauseCheckMiddleware(BaseMiddleware):
             event.from_user.id,
         )
         return None  # квалификация не запускается
+
+    @staticmethod
+    async def _reopened_after_non_target(contact: dict, fields: dict) -> bool:
+        """Снимает автоматический отказ, когда человек вернулся с новым запросом.
+
+        Нецелевое обращение закрывается с ``paused=true`` — иначе бот
+        продолжал бы разговор, который сам же завершил. Но отказ был вынесен
+        по одному сообщению и остаётся навсегда: человек, спросивший ерунду
+        в первый раз, во второй пишет по делу и молча упирается в ту же
+        стену. Возвращаем его в работу.
+
+        Решение Юлии не трогаем: если статус поставила она или клиент у неё
+        в работе, автоматика остаётся выключенной (ТЗ Юлии, п. 6).
+        """
+        if fields.get("status") != "non_target":
+            return False
+        if fields.get("assigned_to") == "yulia" or status_locked_by_yulia(fields):
+            return False
+        logger.info(
+            "Клиент %s вернулся после автоматического отказа — открываю новый разговор",
+            fields.get("telegram_id"),
+        )
+        await airtable.add_status_change(
+            contact["id"],
+            "non_target",
+            "cold",
+            "Новое обращение после автоматического завершения",
+            "ai",
+        )
+        await airtable.update_contact(
+            contact["id"], {"paused": False, "qualification_completed": False, "result": ""}
+        )
+        fields.update(
+            {"status": "cold", "paused": False, "qualification_completed": False, "result": ""}
+        )
+        return True
 
     async def _reply_as_assistant(self, event: Message, contact: dict, text: str, state) -> None:
         """Ответ справочного ассистента переданному клиенту.

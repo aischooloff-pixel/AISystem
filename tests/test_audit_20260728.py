@@ -575,6 +575,170 @@ async def test_non_target_needs_the_detector_to_agree_mid_chain(stage: Stage) ->
     assert stage.contact(anna).get("paused") is not True
 
 
+# ── Пол обязательных вопросов ──
+
+
+@pytest.mark.parametrize(
+    ("label", "reply"),
+    [
+        ("уверенный warm", qualification(status="warm", confidence=99)),
+        ("уверенный hot без признака", qualification(status="hot", confidence=99)),
+        ("needs_yulia без основания", qualification(confidence=99, needs_yulia=True)),
+        (
+            "нецелевой без согласия детектора",
+            qualification(status="non_target", confidence=99, bot_response="Всего доброго!"),
+        ),
+        (
+            "тяжёлая ситуация без слов клиента",
+            qualification(
+                confidence=99,
+                handoff_trigger="heavy_situation",
+                handoff_quote="проблемы в семье",
+            ),
+        ),
+        (
+            "конфликт по мнению модели",
+            qualification(confidence=99, handoff_trigger="conflict", handoff_quote="год"),
+        ),
+    ],
+)
+async def test_four_answers_are_collected_before_any_verdict(
+    stage: Stage, label: str, reply: dict
+) -> None:
+    """Четыре ответа собираются, что бы модель ни возвращала.
+
+    Требование заказчика 29.07: «два вопроса и сразу вывод — это очень мало».
+    Ни уверенность, ни флаги, ни оценки состояния не сокращают цепочку —
+    только слова самого клиента (проверяются отдельными тестами).
+    """
+    anna = stage.client()
+    stage.openai.script("scenario", scenario("B_problem"))
+    stage.openai.script("qualify", *[reply] * 5)
+
+    await anna.says("проблемы в семье")
+    for answer in ("более года", "не понимаю причину", "ходила к психологу"):
+        assert not handed_off(anna), f"{label}: передача до четвёртого ответа"
+        assert stage.contact(anna).get("paused") is not True, f"{label}: диалог закрыт досрочно"
+        await anna.says(answer)
+
+    # Четыре ответа собраны: duration + три содержательных
+    data = stage.contact(anna)
+    assert data.get("paused") is not True or handed_off(anna)
+    questions = [m for m in anna.inbox if m.endswith("?")]
+    assert len(questions) >= 4, f"{label}: задано {len(questions)} вопросов вместо четырёх"
+
+
+async def test_explicit_words_still_cut_below_the_floor(stage: Stage) -> None:
+    """Пол не мешает услышать прямую просьбу клиента."""
+    anna = stage.client()
+    stage.openai.script("scenario", scenario("B_problem"))
+    stage.openai.script(
+        "qualify",
+        qualification(
+            status="hot",
+            confidence=95,
+            readiness_signal="booking",
+            handoff_trigger="booking_or_price",
+            handoff_quote="хочу записаться",
+            needs_yulia=True,
+            needs_yulia_reason="Готов записаться",
+        ),
+    )
+
+    await anna.says("проблемы в семье")
+    await anna.says("год, хочу записаться")
+
+    assert handed_off(anna), "прямую просьбу записаться проигнорировали ради пола вопросов"
+
+
+async def test_next_question_is_adapted_to_the_answer(stage: Stage) -> None:
+    """Формулировку следующего вопроса даёт модель, услышав ответ.
+
+    Требование заказчика 29.07: вопросы не должны быть заскриптованы —
+    бот обязан читать ответ и спрашивать дальше под него.
+    """
+    anna = stage.client()
+    adapted = "Вы сказали «больше года» — что за это время менялось сильнее всего?"
+    stage.openai.script("scenario", scenario("B_problem"))
+    stage.openai.script("qualify", qualification(confidence=50, next_question=adapted))
+
+    await anna.says("проблемы в семье")
+    await anna.says("больше года")
+
+    assert anna.last == adapted, "бот задал шаблонный вопрос вместо адаптированного"
+    assert texts.QUESTION_2 not in anna.inbox
+    # Тема вопроса задана сценарием, формулировка — моделью
+    assert texts.QUESTION_2 in stage.openai.last_prompt("qualify")
+
+
+async def test_scripted_question_is_used_when_the_model_gives_none(stage: Stage) -> None:
+    """Модель промолчала — клиент всё равно получает вопрос, а не тишину."""
+    anna = stage.client()
+    stage.openai.script("scenario", scenario("B_problem"))
+    stage.openai.script("qualify", qualification(confidence=50, next_question=None))
+
+    await anna.says("проблемы в семье")
+    await anna.says("больше года")
+
+    assert anna.last == texts.QUESTION_2
+
+
+async def test_client_returning_after_refusal_gets_a_new_conversation(stage: Stage) -> None:
+    """Автоматический отказ не остаётся на человеке навсегда.
+
+    Нецелевое обращение закрывается с paused=true — иначе бот продолжал бы
+    разговор, который сам же завершил. Но вердикт вынесен по одному
+    сообщению: тот, кто в первый раз написал ерунду, во второй пишет по делу
+    и молча упирался в ту же стену.
+    """
+    anna = stage.client()
+    stage.crm.seed(
+        "Contacts",
+        {
+            "telegram_id": anna.id,
+            "name": anna.name,
+            "status": "non_target",
+            "paused": True,
+            "qualification_completed": True,
+            "conversation_history": history(
+                ("client", "погода на завтра"),
+                ("bot", texts.NON_TARGET_CLOSING),
+            ),
+        },
+    )
+    stage.openai.script("scenario", scenario("B_problem"))
+    stage.openai.script("qualify", qualification(confidence=50))
+
+    await anna.says("У меня повторяется одна и та же ситуация в бизнесе")
+
+    assert anna.last != texts.ALREADY_WITH_YULIA, "человек снова упёрся в старый отказ"
+    assert anna.last.endswith("?"), "бот не начал новый разговор"
+    fields = stage.contact(anna)
+    assert fields["paused"] is False
+    assert fields["status"] == "cold"
+
+
+async def test_yulias_own_decision_is_not_reopened(stage: Stage) -> None:
+    """Клиента, которого ведёт Юлия, автоматика назад не забирает."""
+    anna = stage.client()
+    stage.crm.seed(
+        "Contacts",
+        {
+            "telegram_id": anna.id,
+            "name": anna.name,
+            "status": "non_target",
+            "paused": True,
+            "assigned_to": "yulia",
+        },
+    )
+    stage.openai.script("info", info_answer("Диагностика длится до 60 минут."))
+
+    await anna.says("А сколько длится диагностика?")
+
+    assert stage.contact(anna)["paused"] is True, "решение Юлии переиграно автоматикой"
+    assert stage.contact(anna)["status"] == "non_target"
+
+
 async def test_hot_without_signal_no_longer_ends_the_dialog_early(stage: Stage) -> None:
     """«Горячий» без признака готовности не обрывает вопросы посреди сценария.
 

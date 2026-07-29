@@ -23,6 +23,7 @@ QUALIFICATION_JSON_FORMAT = """{
   "request_category": "отношения|денежные сценарии|самоценность|границы|внутренняя устойчивость|профессиональные изменения|бизнес и управление|делегирование|масштабирование|переход от ручного управления к системной модели|другое",
   "handoff_trigger": "personal_contact|booking_or_price|support_question|payment_ready|heavy_situation|negative_to_ai|conflict|b2b|education|beyond_knowledge|none",
   "handoff_quote": "дословные слова клиента, из которых следует основание, или null",
+  "next_question": "следующий вопрос человеку своими словами, или null",
   "next_action": "Рекомендованный следующий шаг",
   "needs_yulia": true,
   "needs_yulia_reason": "Причина передачи или null",
@@ -135,6 +136,13 @@ QUALIFICATION_PROMPT_TEMPLATE = """Проведи квалификацию кл�
   коротко, без давления, без запрещённых фраз; если needs_yulia=true —
   корректное сообщение о передаче.
 
+- next_question — следующий вопрос человеку. Тебе задана ТЕМА вопроса, но
+  формулировку выбираешь ты, опираясь на то, что человек только что сказал.
+  Ответ клиента нужно услышать и учесть: подхвати его слова, уточни то, что
+  прозвучало неясно, не спрашивай о том, на что он уже ответил. Один вопрос,
+  коротко, без давления и без предисловий. Если темы нет — null.
+  ТЕМА СЛЕДУЮЩЕГО ВОПРОСА: {question_topic}
+
 Диалог (реплики клиента и бота по порядку):
 \"\"\"{conversation}\"\"\"
 
@@ -203,12 +211,18 @@ def current_cycle(conversation: list[dict]) -> list[dict]:
     return conversation[last_ending + 1 :][-_MAX_TURNS:]
 
 
-def build_qualification_prompt(conversation: str | list[dict]) -> str:
+def build_qualification_prompt(
+    conversation: str | list[dict], *, question_topic: str | None = None
+) -> str:
     """Промпт квалификации по истории диалога.
 
     ``conversation`` — готовая строка или список реплик
     ``[{{"role": "client"|"bot", "text": "..."}}]`` из ``conversation_history``.
     Из списка берётся только текущее обращение (см. ``current_cycle``).
+
+    ``question_topic`` — о чём спросить дальше. Тема фиксирована сценарием
+    (ТЗ, раздел 6), формулировку модель подбирает под сказанное человеком:
+    заскриптованные вопросы не слышат ответа и звучат как анкета.
     """
     if not isinstance(conversation, str):
         lines = []
@@ -226,5 +240,7 @@ def build_qualification_prompt(conversation: str | list[dict]) -> str:
             lines.append(f"{role}: {text}")
         conversation = "\n".join(lines)
     return QUALIFICATION_PROMPT_TEMPLATE.format(
-        conversation=sanitize_user_text(conversation), json_format=QUALIFICATION_JSON_FORMAT
+        conversation=sanitize_user_text(conversation),
+        json_format=QUALIFICATION_JSON_FORMAT,
+        question_topic=question_topic or "вопроса не требуется, next_question=null",
     )

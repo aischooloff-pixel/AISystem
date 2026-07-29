@@ -243,7 +243,12 @@ class AIService:
     # ── Функция 2: квалификация ──
 
     async def qualify(
-        self, conversation: str | list[dict], *, final: bool = True, knowledge: str | None = None
+        self,
+        conversation: str | list[dict],
+        *,
+        final: bool = True,
+        knowledge: str | None = None,
+        question_topic: str | None = None,
     ) -> dict | None:
         """Квалификация по диалогу. Применяет пост-правила ТЗ:
 
@@ -257,7 +262,7 @@ class AIService:
           ``needs_yulia=true`` (валидация, шаг 5) — всегда.
         """
         data = await self._ask_json(
-            build_qualification_prompt(conversation),
+            build_qualification_prompt(conversation, question_topic=question_topic),
             validators.validate_qualification,
             knowledge=knowledge,
         )

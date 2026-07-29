@@ -7,10 +7,14 @@
 - B «Описывает проблему»: первое сообщение = ответ на вопрос 1 (его задаёт
   приветствие), затем вопрос о давности ситуации (добавлен Юлией 2026-07-28)
   и вопросы 2–4; вопрос 5 — только при недостатке информации. Один вопрос
-  за раз. Досрочно цепочку обрывают лишь наблюдаемые события: названный
-  признак готовности, нецелевой запрос, основание передачи из раздела 11.
-  Высокая уверенность в статусе таким событием НЕ является — она измеряет
-  уверенность в статусе, а не полноту собранной картины.
+  за раз. Прежде чем решать судьбу лида, бот обязан собрать MANDATORY_ANSWERS
+  ответов: ниже этого порога разговор обрывают ТОЛЬКО слова самого клиента
+  (просит человека, хочет записаться, называет острое состояние) либо
+  согласованный обоими вызовами модели вывод «запрос не наш». Уверенность
+  в статусе таким словом не является — она измеряет уверенность в статусе,
+  а не полноту собранной картины.
+  Формулировку каждого вопроса подбирает модель под сказанное человеком;
+  тема вопроса закреплена сценарием, заскриптованный текст — запасной.
 - C «Информационный интерес»: ответ по базе знаний без квалификации;
   появился собственный запрос → переключение на сценарий B.
 
@@ -40,6 +44,17 @@ from bot.utils.logger import get_app_logger, log_ai_decision
 logger = get_app_logger()
 
 router = Router(name="qualification")
+
+# Ответы сценария B, из которых складывается картина для Юлии.
+B_ANSWER_KEYS = ("duration", "q2", "q3", "q4", "q5")
+
+# Сколько ответов бот обязан собрать, прежде чем решать судьбу лида.
+# Ниже этого порога квалификацию обрывают только слова самого клиента
+# (просит человека, хочет записаться, называет острое состояние) либо
+# согласованный обоими вызовами модели вывод «запрос не наш».
+# Требование заказчика от 2026-07-29: «два вопроса и сразу вывод — это
+# очень мало». Совпадает с FSM из ТЗ: q1 → q2 → q3 → q4 → [q5].
+MANDATORY_ANSWERS = 4
 
 # Состояния, в которых идёт содержательный диалог (для catch-all нетекста)
 DIALOG_STATES = (
@@ -312,6 +327,7 @@ async def _intermediate_step(
     history: list,
     next_question: str | None,
     next_state,
+    answered: int,
 ) -> None:
     """Шаг сценария B: проверка достаточности → следующий вопрос или финал.
 
@@ -332,7 +348,9 @@ async def _intermediate_step(
     в ТЗ — ``q1 → q2 → q3 → q4 → [q5]``: в скобках только пятый вопрос,
     остальные обязательны.
     """
-    qualification = await get_ai().qualify(history, final=(next_question is None))
+    qualification = await get_ai().qualify(
+        history, final=(next_question is None), question_topic=next_question
+    )
     if qualification is None:
         await _ai_error(message, contact)
         return
@@ -347,13 +365,6 @@ async def _intermediate_step(
             qualification["needs_yulia_reason"] = "Требуется экспертная оценка"
     signal = qualification.get("readiness_signal")
     trigger = qualification.get("handoff_trigger")
-    # Уверенность закрывает только пятый вопрос — единственный, который ТЗ
-    # ставит в скобки («только если информации недостаточно»). Раньше это же
-    # условие закрывало и вопросы 3–4, и разговор обрывался на втором.
-    confident_enough_for_last = (
-        next_question is texts.QUESTION_5
-        and int(qualification.get("confidence") or 0) >= config.ai_confidence_threshold
-    )
     # needs_yulia сюда намеренно не входит. Это свободное суждение модели,
     # и промпт велит ей передавать в том числе «когда AI не уверен» — при
     # двух репликах она не уверена всегда. Живой прод 28.07: «хочу увеличить
@@ -397,7 +408,7 @@ async def _intermediate_step(
         qualification["needs_yulia"] = True
     # Вердикт «нецелевой» посреди цепочки принимается только если с ним
     # согласен детектор сценария — отдельный вызов со своим промптом.
-    # Квалификатор systematically называет нецелевыми темы, которые база
+    # Квалификатор систематически называет нецелевыми темы, которые база
     # знаний прямо относит к практике: «выгорание», «апатия», «проблемы
     # в семье». Одна оценка модели против её же базы знаний разговор
     # не закрывает; финальное решение (next_question is None) — закрывает.
@@ -411,14 +422,31 @@ async def _intermediate_step(
             )
             non_target_now = False
 
-    enough = (
+    # Пол обязательных вопросов. Ниже него разговор обрывают ТОЛЬКО слова
+    # самого клиента: он попросил живого человека, сказал «хочу записаться»,
+    # назвал острое состояние — или это вообще не наш запрос, и с этим
+    # согласны оба вызова модели. Всё остальное (оценки, уверенность,
+    # «мне кажется, случай сложный») ждёт собранной картины.
+    floor_reached = answered >= MANDATORY_ANSWERS
+    stops_regardless = (
         qualification.get("_forced_handoff")  # стоп-фраза: решение кода, не модели
         or explicit
         or (signal not in (None, "none"))
         or non_target_now
-        or confident_enough_for_last
-        or next_question is None
     )
+    if not floor_reached and not stops_regardless:
+        logger.info(
+            "Собрано %d из %d обязательных ответов — продолжаю квалификацию",
+            answered,
+            MANDATORY_ANSWERS,
+        )
+    # Уверенность вправе сократить разговор только после обязательных
+    # ответов — тогда она закрывает пятый вопрос, единственный, который ТЗ
+    # ставит в скобки («только если информации недостаточно»).
+    confident_enough = floor_reached and (
+        int(qualification.get("confidence") or 0) >= config.ai_confidence_threshold
+    )
+    enough = stops_regardless or confident_enough or next_question is None
     if enough:
         # Решение принимается здесь, а квалификация запрашивалась с
         # final=False (пятый вопрос ещё числился впереди). Досрочно
@@ -428,7 +456,13 @@ async def _intermediate_step(
             qualification = get_ai().finalize(qualification)
         await _finish(message, state, bot, config, contact, qualification)
         return
-    await _send_bot_turn(message, contact, next_question)
+    # Формулировку следующего вопроса даёт модель, услышав ответ; тема
+    # закреплена сценарием. Заскриптованный текст остаётся запасным: если
+    # модель промолчала или выдала не строку, клиент всё равно получит
+    # вопрос, а не тишину.
+    adapted = qualification.get("next_question")
+    asked = adapted.strip() if isinstance(adapted, str) and adapted.strip() else next_question
+    await _send_bot_turn(message, contact, asked)
     await state.set_state(next_state)
 
 
@@ -654,8 +688,14 @@ async def _b_step(
         return
     history = await _save_client_turn(contact, message.text, touch_note)
     await state.update_data(**{data_key: message.text})
+    # Сколько содержательных ответов уже собрано: ключи цепочки B в данных FSM.
+    # Считаем по данным, а не по позиции хендлера, — после рестарта позиция
+    # восстанавливается из переписки, и счётчик обязан восстановиться вместе
+    # с ней, иначе клиент прошёл бы четыре вопроса дважды.
+    data = await state.get_data()
+    answered = sum(1 for key in B_ANSWER_KEYS if data.get(key))
     await _intermediate_step(
-        message, state, bot, config, contact, history, next_question, next_state
+        message, state, bot, config, contact, history, next_question, next_state, answered
     )
 
 
@@ -831,6 +871,29 @@ _ANSWER_KEY_BY_QUESTION = {
 }
 
 
+# Позиция в цепочке B по числу ответов клиента. Нужна потому, что формулировку
+# вопроса теперь подбирает модель под сказанное человеком, и сверка по тексту
+# больше не работает: адаптированный вопрос ни с чем не совпадёт, а клиент
+# после рестарта услышал бы всю цепочку заново.
+_B_CHAIN: tuple = (
+    Dialog.b_duration,
+    Dialog.b_question_2,
+    Dialog.b_question_3,
+    Dialog.b_question_4,
+    Dialog.b_question_5,
+)
+
+
+def _resume_b_by_position(history: list[dict]):
+    """Шаг сценария B по числу ответов клиента в текущем обращении."""
+    from bot.prompts.qualifier import current_cycle
+
+    answers = sum(1 for turn in current_cycle(history) if turn.get("role") in ("client", "user"))
+    if not 1 <= answers <= len(_B_CHAIN):
+        return None
+    return _B_CHAIN[answers - 1]
+
+
 def _resume_state(history: list[dict], fields: dict):
     """Позиция в диалоге, восстановленная по переписке.
 
@@ -845,13 +908,19 @@ def _resume_state(history: list[dict], fields: dict):
     for question, resumed in _STATE_BY_LAST_QUESTION:
         if last_bot == question:
             return resumed
+    # Формулировку вопроса подбирает модель — дословного совпадения может
+    # не быть. В сценарии B позицию даёт число ответов клиента.
+    if fields.get("scenario") == "B_problem":
+        resumed = _resume_b_by_position(history)
+        if resumed is not None:
+            return resumed
     # Последняя реплика — не вопрос: это ответ по базе знаний (сценарий C)
     if fields.get("scenario") == "C_info":
         return Dialog.c_info
     return Dialog.waiting_first_message
 
 
-def _data_from_history(history: list[dict]) -> dict:
+def _data_from_history(history: list[dict], fields: dict | None = None) -> dict:
     """Ответы клиента по вопросам бота — восстановление данных FSM."""
     data: dict = {}
     first_client = next((t.get("text") for t in history if t.get("role") == "client"), None)
@@ -868,6 +937,17 @@ def _data_from_history(history: list[dict]) -> dict:
         )
         if answer:
             data[key] = answer
+    if (fields or {}).get("scenario") == "B_problem":
+        # Вопросы адаптированы — по тексту их не опознать. Ответы цепочки B
+        # идут подряд после первого сообщения, поэтому раскладываем позиционно
+        # всё, чего не дало сопоставление по тексту. Без этого счётчик
+        # обязательных ответов после рестарта обнулился бы, и человек прошёл
+        # бы четыре вопроса второй раз.
+        from bot.prompts.qualifier import current_cycle
+
+        answers = [t.get("text") for t in current_cycle(history) if t.get("role") == "client"]
+        for key, answer in zip(B_ANSWER_KEYS, answers[1:]):
+            data.setdefault(key, answer)
     return data
 
 
@@ -926,7 +1006,7 @@ async def restore_after_restart(
     history = _history_from(contact)
     resumed = _resume_state(history, fields)
     await state.set_state(resumed)
-    restored = _data_from_history(history)
+    restored = _data_from_history(history, fields)
     if fields.get("scenario"):
         restored["scenario"] = fields["scenario"]
     if restored:
