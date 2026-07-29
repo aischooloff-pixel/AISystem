@@ -287,6 +287,13 @@ async def _finish(
         return
 
     bot_response = qualification.get("bot_response") or texts.NEUTRAL_FALLBACK
+    if status == "cold" and bot_response.rstrip().endswith("?"):
+        # Холодный ответил «не знаю» на всю цепочку — спрашивать его снова
+        # некуда. Модель это правило игнорирует и в завершающей реплике
+        # опять задаёт вопрос (прод 29.07: четыре подряд «что именно вас
+        # беспокоит?»). Берём утверждённый Юлией текст прогрева.
+        logger.info("Холодный лид: модель снова спросила — заменяю текстом прогрева")
+        bot_response = texts.NURTURING_CLOSING
     _log_decision(fields, qualification, bot_response)
     old_status = fields.get("status", "cold")
     if status != old_status:

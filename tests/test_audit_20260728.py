@@ -731,6 +731,36 @@ async def test_cold_client_is_nurtured_not_handed_over(stage: Stage) -> None:
     assert stage.contact(anna)["status"] == "cold"
 
 
+async def test_cold_client_is_not_asked_yet_another_question(stage: Stage) -> None:
+    """Холодному в конце не задают пятый раз тот же вопрос.
+
+    Прод 29.07: человек ответил «не знаю» на всю цепочку и получил
+    «Что именно в бизнесе вас беспокоит больше всего?» — вопрос, который
+    ему уже задавали. Модель это правило игнорирует, поэтому завершение
+    берётся из утверждённого текста прогрева.
+    """
+    anna = stage.client()
+    stage.openai.script("scenario", scenario("B_problem"))
+    stage.openai.script(
+        "qualify",
+        *[
+            qualification(
+                status="cold",
+                confidence=70,
+                bot_response="Что именно в бизнесе вас беспокоит больше всего?",
+            )
+        ]
+        * 5,
+    )
+
+    await anna.says("с проблемами в бизнесе")
+    for reply in ("более года", "не знаю", "ничего", "хз", "да не знаю я"):
+        await anna.says(reply)
+
+    assert anna.last == texts.NURTURING_CLOSING, "холодному снова задали вопрос"
+    assert not anna.last.endswith("?")
+
+
 async def test_explicit_words_still_cut_below_the_floor(stage: Stage) -> None:
     """Пол не мешает услышать прямую просьбу клиента."""
     anna = stage.client()
