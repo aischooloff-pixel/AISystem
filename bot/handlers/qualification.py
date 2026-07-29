@@ -34,6 +34,7 @@ from bot.services import airtable
 from bot.services.ai import get_ai
 from bot.services.notifier import handoff_to_yulia
 from bot.states import Dialog
+from bot.utils import validators
 from bot.utils.logger import get_app_logger, log_ai_decision
 
 logger = get_app_logger()
@@ -364,11 +365,57 @@ async def _intermediate_step(
             "needs_yulia без названного основания — продолжаю квалификацию (причина: %s)",
             qualification.get("needs_yulia_reason") or "не названа",
         )
+    # Прерывают квалификацию только основания, где клиент ЯВНО что-то сказал
+    # или попросил. Основания, которые модель ВЫВОДИТ из состояния человека
+    # («тяжёлая ситуация», «конфликт»), цепочку не рвут: 29.07 heavy_situation
+    # прилетал на «проблемы в семье» и «выгорание» — обычные целевые запросы.
+    # Флаг при этом сохраняется, и Юлия получает карточку в конце цепочки.
+    explicit = trigger in validators.EXPLICIT_HANDOFF_TRIGGERS
+    if trigger == "heavy_situation":
+        # ТЗ, раздел 11: тяжёлая ситуация → немедленная передача. Но оценке
+        # модели здесь верить нельзя — практика Юлии вся про трудные темы,
+        # и «выгорание» с «тревогой» прилетали как кризис. Прерываем разговор
+        # только если человек сказал об остром состоянии своими словами.
+        marker = validators.find_crisis_marker(
+            " ".join(turn.get("text", "") for turn in history if turn.get("role") == "client")
+        )
+        if marker:
+            logger.info("Острое состояние (%r) — передаю Юлии немедленно", marker)
+        else:
+            logger.info(
+                "heavy_situation без слов острого состояния — продолжаю вопросы, "
+                "Юлия получит карточку в конце"
+            )
+            explicit = False
+            qualification["needs_yulia"] = True
+    if trigger in validators.INFERRED_HANDOFF_TRIGGERS:
+        logger.info(
+            "Основание %r — оценка модели, а не слова клиента: продолжаю вопросы, "
+            "Юлия получит карточку в конце",
+            trigger,
+        )
+        qualification["needs_yulia"] = True
+    # Вердикт «нецелевой» посреди цепочки принимается только если с ним
+    # согласен детектор сценария — отдельный вызов со своим промптом.
+    # Квалификатор systematically называет нецелевыми темы, которые база
+    # знаний прямо относит к практике: «выгорание», «апатия», «проблемы
+    # в семье». Одна оценка модели против её же базы знаний разговор
+    # не закрывает; финальное решение (next_question is None) — закрывает.
+    non_target_now = qualification.get("status") == "non_target"
+    if non_target_now and next_question is not None:
+        detected = (await state.get_data()).get("scenario")
+        if detected not in (None, "non_target"):
+            logger.info(
+                "Квалификатор: non_target, детектор: %s — продолжаю вопросы, решаю в конце",
+                detected,
+            )
+            non_target_now = False
+
     enough = (
         qualification.get("_forced_handoff")  # стоп-фраза: решение кода, не модели
-        or (trigger not in (None, "none"))
+        or explicit
         or (signal not in (None, "none"))
-        or qualification.get("status") == "non_target"
+        or non_target_now
         or confident_enough_for_last
         or next_question is None
     )

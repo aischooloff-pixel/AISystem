@@ -497,6 +497,84 @@ async def test_quoted_handoff_trigger_is_honoured(stage: Stage) -> None:
     assert stage.yulia.inbox
 
 
+async def test_heavy_situation_without_crisis_words_keeps_asking(stage: Stage) -> None:
+    """«Тяжёлая ситуация» без слов острого состояния цепочку не рвёт.
+
+    Живой прогон 29.07: модель возвращала heavy_situation на «полное
+    выгорание на работе» и «постоянная тревога» — обычные целевые запросы,
+    ровно те, ради которых и задаются вопросы. Практика Юлии вся про трудные
+    состояния, и модель, обученная быть осторожной, читает как кризис любую
+    тему. Прерываем разговор только на словах самого человека.
+    """
+    anna = stage.client()
+    stage.openai.script("scenario", scenario("B_problem"))
+    stage.openai.script(
+        "qualify",
+        *[
+            qualification(
+                status="warm",
+                confidence=90,
+                handoff_trigger="heavy_situation",
+                handoff_quote="полное выгорание на работе",
+                needs_yulia=True,
+            )
+        ]
+        * 3,
+    )
+
+    await anna.says("полное выгорание на работе")
+    await anna.says("полгода")
+
+    assert not handed_off(anna), "выгорание принято за кризис и оборвало квалификацию"
+    assert anna.last == texts.QUESTION_2
+
+
+async def test_real_crisis_words_hand_off_immediately(stage: Stage) -> None:
+    """Острое состояние словами клиента — передача сразу (ТЗ, раздел 11)."""
+    anna = stage.client()
+    stage.openai.script("scenario", scenario("B_problem"))
+    stage.openai.script(
+        "qualify",
+        qualification(
+            status="warm",
+            confidence=90,
+            handoff_trigger="heavy_situation",
+            handoff_quote="не вижу выхода",
+            needs_yulia=True,
+            needs_yulia_reason="Эмоционально тяжёлая ситуация",
+        ),
+    )
+
+    await anna.says("мне очень плохо, не вижу выхода")
+    await anna.says("неделю")
+
+    assert handed_off(anna), "человека в остром состоянии продолжили доспрашивать"
+    assert texts.QUESTION_2 not in anna.inbox
+    assert stage.yulia.inbox
+
+
+async def test_non_target_needs_the_detector_to_agree_mid_chain(stage: Stage) -> None:
+    """Вердикт «нецелевой» посреди цепочки требует согласия детектора.
+
+    Квалификатор систематически называет нецелевыми темы, которые база
+    знаний прямо относит к практике: «выгорание», «апатия», «проблемы
+    в семье» (живой прогон 29.07 — status=non_target на всех трёх).
+    Одна оценка модели против её же базы знаний разговор не закрывает.
+    """
+    anna = stage.client()
+    stage.openai.script("scenario", scenario("B_problem"))
+    stage.openai.script(
+        "qualify",
+        *[qualification(status="non_target", confidence=95, bot_response="Всего доброго!")] * 3,
+    )
+
+    await anna.says("полное выгорание на работе")
+    await anna.says("полгода")
+
+    assert anna.last == texts.QUESTION_2, "целевой запрос закрыт как нецелевой"
+    assert stage.contact(anna).get("paused") is not True
+
+
 async def test_hot_without_signal_no_longer_ends_the_dialog_early(stage: Stage) -> None:
     """«Горячий» без признака готовности не обрывает вопросы посреди сценария.
 

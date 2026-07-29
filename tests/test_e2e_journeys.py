@@ -717,15 +717,14 @@ async def test_non_target_is_closed_politely_and_automation_stops(stage: Stage) 
     """Уверенный вердикт «нецелевой»: корректное завершение, автоматика стоп."""
     anna = stage.client()
     closing = "Спасибо, что написали! Этот запрос вне специализации Юлии."
-    stage.openai.script("scenario", scenario("B_problem"))
+    stage.openai.script("scenario", scenario("non_target"))
     stage.openai.script(
         "qualify",
         qualification(status="non_target", confidence=95, bot_response=closing),
     )
 
     await anna.start("other")
-    await anna.says("Продаёте рекламу в канале?")
-    await anna.says("Нужен прайс на размещение")
+    await anna.says("Продаёте рекламу в канале? Нужен прайс на размещение")
 
     assert anna.last == closing
     fields = stage.contact(anna)
@@ -744,12 +743,16 @@ async def test_unsure_non_target_is_never_closed_by_ai(stage: Stage) -> None:
     stage.openai.script("scenario", scenario("B_problem"))
     stage.openai.script(
         "qualify",
-        qualification(status="non_target", confidence=55, bot_response="До свидания."),
+        *[qualification(status="non_target", confidence=55, bot_response="До свидания.")] * 5,
     )
 
     await anna.start("site")
     await anna.says("Я по поводу обучения, но не уверена")
+    await anna.says("Пару месяцев")
     await anna.says("Хочу понять, подходит ли мне это")
+    await anna.says("Пробовала читать материалы")
+    await anna.says("Хочу определиться")
+    await anna.says("Сейчас появилось время")
 
     # Передача есть, но рассказа о диагностике нет: вердикт «нецелевой»
     # под вопросом, и предлагать формат работы преждевременно

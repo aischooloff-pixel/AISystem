@@ -195,7 +195,7 @@ async def test_scenario_08_out_of_scope(monkeypatch, fake_ai, config):
         "Спасибо, что написали. Этот запрос выходит за рамки специализации Юлии — "
         "с подбором лечения поможет врач-психиатр. Всего вам доброго!"
     )
-    fake_ai.scenarios = [{"scenario": "B_problem", "confidence": 90, "reason": "мед. запрос"}]
+    fake_ai.scenarios = [{"scenario": "non_target", "confidence": 95, "reason": "мед. запрос"}]
     m = FakeMessage(make_user(), "Какие таблетки попить от депрессии?")
     await qual.first_message(m, state, FakeBot(), config)
     fake_ai.qualifications = [
