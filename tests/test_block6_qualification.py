@@ -316,6 +316,7 @@ async def test_immediate_handoff_trigger_mid_flow(monkeypatch, fake_ai, config):
             needs_yulia=True,
             needs_yulia_reason="просит связаться лично",
             handoff_trigger="personal_contact",
+            handoff_quote="Свяжите меня с Юлией",
             confidence=95,
         )
     ]

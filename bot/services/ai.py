@@ -17,6 +17,7 @@ import httpx
 from bot import texts
 from bot.config import Config
 from bot.prompts.comment_analyzer import build_comment_prompt
+from bot.prompts import qualifier as prompts_qualifier
 from bot.prompts.qualifier import build_info_answer_prompt, build_qualification_prompt
 from bot.prompts.questionnaire_analyzer import build_questionnaire_prompt
 from bot.prompts.scenario_detector import build_scenario_prompt
@@ -263,6 +264,8 @@ class AIService:
         if data is None:
             return None
 
+        self._verify_handoff_trigger(data, conversation)
+
         if data.get("readiness_signal") in (None, "none"):
             # «Критерии квалификации» определяют и статус, и обе оси через
             # наблюдаемые признаки: горячий — просит записаться / спрашивает
@@ -344,6 +347,43 @@ class AIService:
                 data["needs_yulia_reason"] = f"Стоп-фраза в ответе AI: {stop_phrase}"
 
         return self.finalize(data) if final else data
+
+    @staticmethod
+    def _verify_handoff_trigger(data: dict, conversation: str | list[dict]) -> None:
+        """Снимает основание передачи, не подтверждённое словами клиента.
+
+        ``handoff_trigger`` обрывает квалификацию, поэтому выдуманное
+        основание стоит дорого. Прод 29.07: в промпт попала склейка четырёх
+        разговоров одного человека, среди них «Ктт такая юлия» — модель
+        вернула personal_contact, и новое обращение оборвалось на первом
+        вопросе, хотя о личном контакте никто не просил.
+
+        Требуем цитату и проверяем, что она действительно есть в репликах
+        КЛИЕНТА текущего обращения. Проверка по нормализованному тексту:
+        модель цитирует со своей пунктуацией и падежами.
+        """
+        trigger = data.get("handoff_trigger")
+        if trigger in (None, "none"):
+            return
+        if isinstance(conversation, str):
+            client_text = conversation
+        else:
+            client_text = " ".join(
+                turn.get("text", "")
+                for turn in prompts_qualifier.current_cycle(conversation)
+                if turn.get("role") in ("client", "user")
+            )
+        quote = data.get("handoff_quote")
+        haystack = validators.normalize_for_match(client_text)
+        needle = validators.normalize_for_match(quote) if isinstance(quote, str) else ""
+        if needle and needle in haystack:
+            return
+        logger.info(
+            "Основание передачи %r не подтверждено словами клиента (цитата: %r) — снимаю",
+            trigger,
+            quote,
+        )
+        data["handoff_trigger"] = "none"
 
     def finalize(self, data: dict) -> dict:
         """Пост-правила, применимые только когда решение принимается.

@@ -107,6 +107,7 @@ async def test_scenario_04_asks_for_yulia(monkeypatch, fake_ai, config):
             needs_yulia=True,
             needs_yulia_reason="просит личное общение",
             handoff_trigger="personal_contact",
+            handoff_quote="поговорить с Юлией лично",
         )
     ]
     m = FakeMessage(make_user(), "Можно поговорить с Юлией лично?")
@@ -273,6 +274,7 @@ async def test_scenario_13_refuses_bot(monkeypatch, fake_ai, config):
             needs_yulia=True,
             needs_yulia_reason="не хочет говорить с ботом",
             handoff_trigger="negative_to_ai",
+            handoff_quote="не хочу разговаривать с ботом",
         )
     ]
     m = FakeMessage(make_user(), "Я не хочу разговаривать с ботом")
@@ -306,6 +308,7 @@ async def test_scenario_15_sensitive_info(monkeypatch, fake_ai, config):
             needs_yulia=True,
             needs_yulia_reason="эмоционально тяжёлая ситуация",
             handoff_trigger="heavy_situation",
+            handoff_quote="пережила очень тяжёлое событие",
             summary="Клиент сообщил о тяжёлой личной ситуации (без деталей).",
         )
     ]

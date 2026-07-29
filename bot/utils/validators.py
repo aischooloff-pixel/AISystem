@@ -107,6 +107,15 @@ def find_stop_phrase(text: str | None) -> str | None:
     return None
 
 
+def normalize_for_match(text: str | None) -> str:
+    """Текст для сверки цитаты с репликами клиента.
+
+    Модель цитирует со своей пунктуацией и регистром, поэтому сравниваем
+    по нормализованной форме — той же, что и для стоп-фраз.
+    """
+    return _normalize(text) if isinstance(text, str) else ""
+
+
 def sanitize_user_text(text: str) -> str:
     """Готовит пользовательский текст к вставке в промпт.
 

@@ -16,6 +16,7 @@ from itertools import count
 
 import httpx
 import pytest
+from aiogram.fsm.storage.memory import MemoryStorage
 
 from bot.services.airtable import AirtableClient
 from bot.utils.logger import APP_LOGGER_NAME
@@ -152,12 +153,21 @@ _shared_dispatcher = None
 
 
 def get_shared_dispatcher(config):
+    """Общий диспетчер с ЧИСТЫМ хранилищем FSM на каждый вызов.
+
+    Диспетчер один на процесс (роутеры aiogram — модульные синглтоны), но
+    состояния между тестами течь не должны: MemoryStorage жил весь прогон,
+    и позиция клиента из одного сценария доставалась клиенту следующего.
+    Проявлялось как падение, зависящее от порядка запуска, — ровно тот класс
+    дефектов, что уже стоил проекту одиннадцати молча непроверяющих тестов.
+    """
     global _shared_dispatcher
     if _shared_dispatcher is None:
         from bot.main import create_dispatcher
 
         _shared_dispatcher = create_dispatcher(config)
-        _shared_dispatcher["config"] = config
+    _shared_dispatcher["config"] = config
+    _shared_dispatcher.fsm.storage = MemoryStorage()
     return _shared_dispatcher
 
 

@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+from bot import texts
 from bot.utils.validators import sanitize_user_text
 
 QUALIFICATION_JSON_FORMAT = """{
@@ -21,6 +22,7 @@ QUALIFICATION_JSON_FORMAT = """{
   "readiness_signal": "booking|price_and_dates|payment|personal_contact|explicit_confirmation|deadline|none",
   "request_category": "отношения|денежные сценарии|самоценность|границы|внутренняя устойчивость|профессиональные изменения|бизнес и управление|делегирование|масштабирование|переход от ручного управления к системной модели|другое",
   "handoff_trigger": "personal_contact|booking_or_price|support_question|payment_ready|heavy_situation|negative_to_ai|conflict|b2b|education|beyond_knowledge|none",
+  "handoff_quote": "дословные слова клиента, из которых следует основание, или null",
   "next_action": "Рекомендованный следующий шаг",
   "needs_yulia": true,
   "needs_yulia_reason": "Причина передачи или null",
@@ -50,6 +52,13 @@ QUALIFICATION_PROMPT_TEMPLATE = """Проведи квалификацию кл�
   b2b — запрос от компании; education — обучение, партнёрство, работа в ITC;
   beyond_knowledge — задан вопрос, ответа на который нет в базе знаний.
   Ничего из этого не прозвучало — none;
+- handoff_quote — ДОСЛОВНАЯ цитата из сообщения клиента, в которой звучит
+  это основание. Основание засчитывается только с цитатой: не можешь
+  процитировать — значит основания не было, ставь none и null;
+- основание должно прозвучать СЛОВАМИ КЛИЕНТА, а не следовать из твоих
+  выводов. Вопрос «кто такая Юлия» или интерес к ней — это НЕ просьба
+  о личном контакте: personal_contact ставится, когда человек просит
+  связать его с Юлией или поговорить с ней лично;
 - «мне не хватает информации» и «случай кажется сложным» основаниями НЕ
   являются: это твоя неуверенность, а не событие в диалоге. Ставь none
   и продолжай задавать вопросы — недостаток уверенности учтёт порог 85%
@@ -142,16 +151,42 @@ def build_info_answer_prompt(question: str, history: str = "") -> str:
     )
 
 
+# Реплики бота, которыми заканчивается разговор. Всё, что было до них, —
+# завершённый эпизод: он не должен влиять на квалификацию нового обращения.
+_CYCLE_ENDINGS = (texts.HANDOFF_MESSAGE, texts.HANDOFF_FOLLOWUP, texts.NON_TARGET_CLOSING)
+
+# Потолок на случай истории без явной границы (данные, накопленные до того,
+# как реплики бота начали сохраняться).
+_MAX_TURNS = 20
+
+
+def current_cycle(conversation: list[dict]) -> list[dict]:
+    """Реплики текущего обращения, без завершённых разговоров.
+
+    ``conversation_history`` копится за всё время: человек, писавший месяц
+    назад, приходит с прежним хвостом. Прод 29.07: клиент тестировал с одного
+    аккаунта, в промпт ушли семь его реплик из четырёх разных разговоров —
+    среди них «Ктт такая юлия», — и модель сочла это просьбой о личном
+    контакте, оборвав квалификацию нового обращения на первом же вопросе.
+    """
+    last_ending = -1
+    for index, turn in enumerate(conversation):
+        if turn.get("role") not in ("client", "user") and turn.get("text") in _CYCLE_ENDINGS:
+            last_ending = index
+    return conversation[last_ending + 1 :][-_MAX_TURNS:]
+
+
 def build_qualification_prompt(conversation: str | list[dict]) -> str:
     """Промпт квалификации по истории диалога.
 
     ``conversation`` — готовая строка или список реплик
     ``[{{"role": "client"|"bot", "text": "..."}}]`` из ``conversation_history``.
+    Из списка берётся только текущее обращение (см. ``current_cycle``).
     """
     if not isinstance(conversation, str):
         lines = []
         previous: tuple[str, str] | None = None
-        for turn in conversation:
+        for turn in current_cycle(conversation):
             role = "Клиент" if turn.get("role") in ("client", "user") else "Бот"
             text = turn.get("text", "")
             # Повтор подряд той же реплики — не новая информация. Клиент

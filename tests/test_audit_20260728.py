@@ -26,6 +26,7 @@ from tests.test_block6_qualification import config  # noqa: F401 — фикст�
 from tests.test_e2e_journeys import (
     Stage,
     handed_off,
+    history,
     info_answer,
     qualification,
     scenario,
@@ -390,6 +391,7 @@ async def test_named_handoff_trigger_ends_the_chain_immediately(stage: Stage) ->
             confidence=90,
             readiness_signal="none",
             handoff_trigger="heavy_situation",
+            handoff_quote="мне совсем плохо",
             needs_yulia=True,
             needs_yulia_reason="Эмоционально тяжёлая ситуация",
         ),
@@ -401,6 +403,97 @@ async def test_named_handoff_trigger_ends_the_chain_immediately(stage: Stage) ->
 
     assert handed_off(anna), "тяжёлую ситуацию не передали немедленно"
     assert texts.QUESTION_2 not in anna.inbox, "человека доспрашивали в тяжёлом состоянии"
+    assert stage.yulia.inbox
+
+
+async def test_finished_conversations_do_not_leak_into_the_next_prompt(stage: Stage) -> None:
+    """В квалификацию идёт только текущее обращение.
+
+    Прод 29.07: человек тестировал с одного аккаунта, ``conversation_history``
+    копила все его разговоры, и в промпт ушла склейка из четырёх — «Ктт такая
+    юлия», «Что тауое itc», «Я хочу увеличить доход», «Привет», «Проблемы
+    в семье». Модель прочитала это как просьбу о личном контакте и оборвала
+    квалификацию нового обращения на первом же вопросе.
+    """
+    anna = stage.client()
+    stage.crm.seed(
+        "Contacts",
+        {
+            "telegram_id": anna.id,
+            "name": anna.name,
+            "status": "warm",
+            "conversation_history": history(
+                ("client", "Ктт такая юлия"),
+                ("bot", "Юлия Гейкина — системный диагност."),
+                ("client", "Хочу связаться с Юлией лично"),
+                ("bot", texts.HANDOFF_MESSAGE),
+                ("bot", texts.HANDOFF_FOLLOWUP),
+            ),
+        },
+    )
+    stage.openai.script("scenario", scenario("B_problem"))
+    stage.openai.script("qualify", *[qualification(status="warm", confidence=92)] * 3)
+
+    await anna.says("Проблемы в семье")
+    await anna.says("Больше года")
+
+    prompt = stage.openai.last_prompt("qualify")
+    assert "Ктт такая юлия" not in prompt, "завершённый разговор попал в промпт"
+    assert "Хочу связаться с Юлией лично" not in prompt, "старая просьба попала в промпт"
+    assert "Проблемы в семье" in prompt, "текущее обращение из промпта потерялось"
+    assert not handed_off(anna), "старый разговор оборвал квалификацию нового"
+
+
+async def test_unquoted_handoff_trigger_is_dropped(stage: Stage) -> None:
+    """Основание передачи без подтверждающей цитаты не засчитывается.
+
+    ``handoff_trigger`` обрывает квалификацию, поэтому выдуманное основание
+    стоит дорого. Модель обязана процитировать слова клиента; цитата, которой
+    в его репликах нет, — признак того, что основание додумано.
+    """
+    anna = stage.client()
+    stage.openai.script("scenario", scenario("B_problem"))
+    stage.openai.script(
+        "qualify",
+        *[
+            qualification(
+                status="warm",
+                confidence=90,
+                handoff_trigger="personal_contact",
+                handoff_quote="свяжите меня с Юлией",  # клиент такого не говорил
+                needs_yulia=True,
+            )
+        ]
+        * 3,
+    )
+
+    await anna.says("Проблемы в семье")
+    await anna.says("Больше года")
+
+    assert not handed_off(anna), "непроцитированное основание оборвало квалификацию"
+    assert anna.last == texts.QUESTION_2
+
+
+async def test_quoted_handoff_trigger_is_honoured(stage: Stage) -> None:
+    """Основание с настоящей цитатой работает как раньше."""
+    anna = stage.client()
+    stage.openai.script("scenario", scenario("B_problem"))
+    stage.openai.script(
+        "qualify",
+        qualification(
+            status="warm",
+            confidence=90,
+            handoff_trigger="personal_contact",
+            handoff_quote="свяжите меня с Юлией",
+            needs_yulia=True,
+            needs_yulia_reason="Просит личное общение",
+        ),
+    )
+
+    await anna.says("Проблемы в семье")
+    await anna.says("Больше года, свяжите меня с Юлией")
+
+    assert handed_off(anna), "подтверждённое основание проигнорировано"
     assert stage.yulia.inbox
 
 
