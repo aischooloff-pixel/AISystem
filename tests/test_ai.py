@@ -309,9 +309,43 @@ async def test_each_error_type_has_independent_retry() -> None:
 # ── Квалификация ──
 
 
+async def test_low_confidence_keeps_a_warm_client_in_the_dialogue() -> None:
+    """Тёплого и холодного низкая уверенность Юлии не отдаёт.
+
+    «Маршрутизация после квалификации»: warm — продолжать разговор,
+    cold — прогрев. Порог 85% из раздела 11 делал обратное: клиент,
+    ответивший «да просто захотелось больше бабок», получал «передал
+    информацию Юлии», и разговор обрывался (прод 29.07).
+    """
+    for status in ("warm", "cold"):
+        fake = FakeOpenAI(
+            [json.dumps(make_qualification(status=status, confidence=70, needs_yulia=False))]
+        )
+        service = make_service(fake)
+        try:
+            result = await service.qualify("Клиент: ...", knowledge=KNOWLEDGE)
+        finally:
+            await service.close()
+        assert result is not None
+        assert result["needs_yulia"] is False, f"{status} с уверенностью 70 ушёл Юлии"
+
+
 async def test_low_confidence_forces_needs_yulia() -> None:
-    """Критерий: confidence < 85 → needs_yulia = true."""
-    fake = FakeOpenAI([json.dumps(make_qualification(confidence=71, needs_yulia=False))])
+    """confidence < 85 → needs_yulia = true.
+
+    Порог из «Критериев квалификации», п. 9. С 29.07 он не применяется
+    к тёплым и холодным: их маршрут — разговор и прогрев, а не передача
+    (см. test_low_confidence_keeps_a_warm_client_in_the_dialogue).
+    """
+    fake = FakeOpenAI(
+        [
+            json.dumps(
+                make_qualification(
+                    status="hot", readiness_signal="booking", confidence=71, needs_yulia=False
+                )
+            )
+        ]
+    )
     service = make_service(fake)
     try:
         result = await service.qualify("Клиент: ...", knowledge=KNOWLEDGE)
@@ -329,6 +363,8 @@ async def test_low_confidence_mark_preserved_with_model_reason() -> None:
         [
             json.dumps(
                 make_qualification(
+                    status="hot",
+                    readiness_signal="booking",
                     confidence=70,
                     needs_yulia=False,
                     needs_yulia_reason="клиент задаёт вопросы о формате",

@@ -670,21 +670,61 @@ async def test_warm_client_gets_an_answer_not_the_handoff_template(stage: Stage)
     assert fields.get("paused") is not True, "разговор с тёплым клиентом закрыт"
 
 
-async def test_low_confidence_still_reaches_yulia_at_the_end(stage: Stage) -> None:
-    """Порог 85% остаётся основанием передачи (ТЗ, п. 9)."""
+async def test_low_confidence_keeps_a_warm_client_talking(stage: Stage) -> None:
+    """Тёплого низкая уверенность Юлии не отдаёт — разговор продолжается.
+
+    Порог 85% из раздела 11 отправлял к Юлии и тёплых: клиент, ответивший
+    «да просто захотелось больше бабок», получал «передал информацию Юлии»,
+    и разговор обрывался (прод 29.07). «Маршрутизация после квалификации»
+    ведёт тёплого дальше по разговору, а не к человеку.
+    Отступление от раздела 11 — по решению Ивана 29.07.
+    """
     anna = stage.client()
+    reply = "Понимаю вас. Расскажите, что для вас сейчас важнее всего?"
     stage.openai.script("scenario", scenario("B_problem"))
     stage.openai.script(
         "qualify",
-        *[qualification(status="warm", confidence=60, handoff_trigger="none")] * 5,
+        *[
+            qualification(
+                status="warm", confidence=60, handoff_trigger="none", bot_response=reply
+            )
+        ]
+        * 5,
     )
 
     await anna.says("проблемы в семье")
     # Уверенности не хватает — задаётся и пятый вопрос, условный по ТЗ
-    for reply in ("больше года", "упрёки", "ходили к психологу", "хочу прекратить", "сейчас тяжело"):
-        await anna.says(reply)
+    for answer in ("больше года", "упрёки", "ходили к психологу", "хочу прекратить", "сейчас тяжело"):
+        await anna.says(answer)
 
-    assert stage.yulia.inbox, "неуверенная квалификация не дошла до Юлии"
+    assert stage.yulia.inbox == [], "тёплого клиента увели Юлии из-за низкой уверенности"
+    assert texts.HANDOFF_MESSAGE not in anna.inbox
+    assert stage.contact(anna).get("paused") is not True
+
+
+async def test_low_confidence_on_a_hot_lead_still_reaches_yulia(stage: Stage) -> None:
+    """Порог 85% остаётся основанием передачи там, где решение действительно
+    за Юлией: клиент назвал признак готовности, но картина спорная."""
+    anna = stage.client()
+    stage.openai.script("scenario", scenario("B_problem"))
+    stage.openai.script(
+        "qualify",
+        *[
+            qualification(
+                status="hot",
+                readiness_signal="booking",
+                confidence=60,
+                handoff_trigger="booking_request",
+                handoff_quote="хочу записаться",
+            )
+        ]
+        * 5,
+    )
+
+    await anna.says("проблемы в семье")
+    await anna.says("больше года, хочу записаться")
+
+    assert stage.yulia.inbox, "неуверенная квалификация горячего не дошла до Юлии"
     assert "ЭКСПЕРТНАЯ ОЦЕНКА" in stage.yulia.last.upper()
 
 
@@ -1003,7 +1043,13 @@ async def test_early_finish_still_applies_the_confidence_threshold(stage: Stage)
     stage.openai.script(
         "qualify",
         qualification(confidence=50),
-        qualification(status="warm", readiness_signal="personal_contact", confidence=60),
+        qualification(
+            status="hot",
+            readiness_signal="personal_contact",
+            confidence=60,
+            handoff_trigger="personal_contact",
+            handoff_quote="поговорить с Юлией напрямую",
+        ),
     )
 
     await anna.start("site")

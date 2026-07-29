@@ -558,19 +558,29 @@ async def test_scenario_b_asks_all_five_questions_when_unclear(stage: Stage) -> 
 
 
 async def test_low_confidence_at_the_end_goes_to_yulia_with_a_warning(stage: Stage) -> None:
-    """Финальная квалификация ниже 85% — решает Юлия, а не AI (порог из ТЗ)."""
+    """Финальная квалификация ниже 85% — решает Юлия, а не AI (порог из ТЗ).
+
+    Порог действует там, где решение действительно за Юлией: человек назвал
+    признак готовности, но картина спорная. Тёплых и холодных он с 29.07
+    не трогает — их маршрут разговор и прогрев.
+    """
     anna = stage.client()
     stage.openai.script("scenario", scenario("B_problem"))
     # Четыре промежуточных шага «информации мало» и финальный с той же оценкой
-    stage.openai.script("qualify", *[qualification(confidence=60)] * 5)
+    stage.openai.script(
+        "qualify",
+        *[
+            qualification(
+                status="hot", readiness_signal="explicit_confirmation", confidence=60
+            )
+        ]
+        * 5,
+    )
 
     await anna.start("site")
     await anna.says("Что-то не так, но не могу объяснить")
-    await anna.says("Давно уже")
-    await anna.says("Не знаю даже, с чего начать")
-    await anna.says("Наверное, всё сразу")
-    await anna.says("Сложно сказать")
-    await anna.says("Просто устала")
+    # Признак готовности назван — цепочка обрывается законно, решение за Юлией
+    await anna.says("Давно уже, и я готова начать")
 
     assert handed_off(anna)
     card = stage.yulia.last

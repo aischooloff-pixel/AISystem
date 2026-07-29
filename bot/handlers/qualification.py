@@ -514,7 +514,9 @@ async def first_message(message: Message, state: FSMContext, bot: Bot, config: C
     )
     await airtable.update_contact(contact["id"], {"scenario": kind})
     await state.update_data(q1=message.text, scenario=kind)
-    await _route_scenario(kind, message, state, bot, config, contact)
+    await _route_scenario(
+        kind, message, state, bot, config, contact, scenario.get("first_question")
+    )
 
 
 async def _route_scenario(
@@ -524,8 +526,12 @@ async def _route_scenario(
     bot: Bot,
     config: Config,
     contact: dict,
+    first_question: str | None = None,
 ) -> None:
-    """Ветвление по определённому сценарию (ТЗ, Блок 6 + разделы 8 и 11)."""
+    """Ветвление по определённому сценарию (ТЗ, Блок 6 + разделы 8 и 11).
+
+    ``first_question`` — формулировка первого вопроса сценария B от детектора.
+    """
     if kind == "A_ready":
         # Сначала ответ на то, с чем человек пришёл, потом уточнения.
         # Прод 29.07: «сколько стоит диагностика» и «хочу записаться»
@@ -540,8 +546,15 @@ async def _route_scenario(
     elif kind == "B_problem":
         # Первое сообщение — уже ответ на вопрос 1 (его задало приветствие).
         # Дальше цепочка ТЗ q2 → q3 → q4 → [q5], перед ней — вопрос о давности
-        # ситуации (добавлен Юлией 2026-07-28)
-        await _send_bot_turn(message, contact, texts.QUESTION_DURATION)
+        # ситуации (добавлен Юлией 2026-07-28).
+        #
+        # Формулировку даёт детектор сценария — он уже прочитал сообщение,
+        # отдельный вызов модели не нужен. Прод 29.07: после отказа по
+        # тарологии клиент написал «хочу помощь в бизнесе», и бот спросил
+        # «как давно длится эта ситуация?» — про ситуацию, которой ему ещё
+        # не рассказали.
+        asked = _adapted_or_scripted(first_question, texts.QUESTION_DURATION)
+        await _send_bot_turn(message, contact, asked)
         await state.set_state(Dialog.b_duration)
     elif kind == "non_target":
         await _close_non_target(message, state, bot, config, contact)
@@ -851,7 +864,9 @@ async def c_message(message: Message, state: FSMContext, bot: Bot, config: Confi
         # Появился собственный запрос — переключаемся с C на рабочий сценарий
         await state.update_data(q1=message.text, scenario=kind)
         await airtable.update_contact(contact["id"], {"scenario": kind})
-    await _route_scenario(kind, message, state, bot, config, contact)
+    await _route_scenario(
+        kind, message, state, bot, config, contact, scenario.get("first_question")
+    )
 
 
 # ── Свободный диалог после квалификации (warm/cold) ──
