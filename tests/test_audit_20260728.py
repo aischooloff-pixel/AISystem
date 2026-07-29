@@ -761,6 +761,28 @@ async def test_cold_client_is_not_asked_yet_another_question(stage: Stage) -> No
     assert not anna.last.endswith("?")
 
 
+@pytest.mark.parametrize(
+    "question",
+    ["сколько стоит диагностика", "Сколько стоит диагностика?", "какая стоимость встречи"],
+)
+async def test_price_question_is_answered_before_questions(stage: Stage, question: str) -> None:
+    """На вопрос о цене сначала ответ, потом уточнения.
+
+    Прод 29.07: «сколько стоит диагностика» уходило прямо в анкету, человек
+    трижды повторил вопрос и не получил ответа. Стоимость диагностики бот
+    называть вправе («Продуктовая линейка»).
+    """
+    anna = stage.client()
+    price = "Первичная системная диагностика стоит 15 000 ₽, встреча до 60 минут."
+    stage.openai.script("scenario", scenario("A_ready"))
+    stage.openai.script("info", info_answer(price))
+
+    await anna.says(question)
+
+    assert price in anna.inbox, "на вопрос о цене не ответили"
+    assert anna.inbox.index(price) < anna.inbox.index(texts.A_INTRO), "ответ пришёл после анкеты"
+
+
 async def test_explicit_words_still_cut_below_the_floor(stage: Stage) -> None:
     """Пол не мешает услышать прямую просьбу клиента."""
     anna = stage.client()
@@ -942,11 +964,14 @@ async def test_early_finish_still_applies_the_confidence_threshold(stage: Stage)
     assert texts.QUESTION_3 not in anna.inbox, "просьбу о личном контакте проигнорировали"
 
 
-async def test_hot_without_signal_reaches_yulia_at_the_end_of_the_chain(stage: Stage) -> None:
-    """Понижение hot → warm не теряется: в конце цепочки Юлия всё равно решает.
+async def test_hot_without_signal_never_reaches_yulia(stage: Stage) -> None:
+    """Без названного признака готовности передачи не происходит вовсе.
 
-    Передача откладывается до конца вопросов, но не отменяется — иначе
-    правка против выдуманной готовности превратилась бы в потерю лида.
+    27.07 здесь стояла передача «на решение Юлии»: тогда проблемой был
+    ложный ярлык «горячий» в карточке. Оказалось, что модель объявляет
+    горячим почти каждого — 29.07 клиент, сказавший «у нас плохое общение»,
+    ушёл Юлии именно так. Тёплый остаётся в разговоре с ботом и попадёт
+    к Юлии, когда скажет о готовности.
     """
     anna = stage.client()
     stage.openai.script("scenario", scenario("B_problem"))
@@ -962,9 +987,8 @@ async def test_hot_without_signal_reaches_yulia_at_the_end_of_the_chain(stage: S
     await anna.says("Пробовала нанимать людей")
     await anna.says("Хочу выстроить систему")
 
-    assert handed_off(anna), "клиент с признаками интереса потерян"
-    assert "ТЁПЛЫЙ ЛИД" in stage.yulia.last
-    assert "о готовности записаться не говорил" in stage.yulia.last
+    assert not handed_off(anna), "выдуманная готовность увела клиента Юлии"
+    assert stage.yulia.inbox == [], "Юлию побеспокоили без признака готовности"
     assert stage.contact(anna)["status"] == "warm"
 
 

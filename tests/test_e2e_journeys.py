@@ -635,12 +635,13 @@ async def test_describing_a_situation_is_not_a_hot_lead(stage: Stage) -> None:
     await elena.says("Пробовала делегировать")
     await elena.says("Хочу выстроить систему")
 
-    card = stage.yulia.last
-    assert "ГОРЯЧИЙ ЛИД" not in card, "выдуманная готовность доехала до карточки"
-    assert "ТЁПЛЫЙ ЛИД" in card
-    assert "о готовности записаться не говорил" in card
-    assert "Готовность: средняя" in card and "Срочность: средняя" in card
-    assert stage.contact(elena)["status"] == "warm"
+    # Передачи нет вовсе: без названного признака готовности человек
+    # остаётся в разговоре с ботом, а не уходит Юлии «на решение»
+    assert stage.yulia.inbox == [], "выдуманная готовность дошла до Юлии"
+    assert not handed_off(elena)
+    fields = stage.contact(elena)
+    assert fields["status"] == "warm"
+    assert fields["readiness"] == "medium" and fields["urgency"] == "medium"
 
 
 async def test_request_category_reaches_the_card_and_the_crm(stage: Stage) -> None:
@@ -1105,9 +1106,12 @@ async def test_restart_keeps_the_answers_for_yulias_card(stage: Stage) -> None:
             ),
         },
     )
-    stage.openai.script("qualify", qualification(status="hot", confidence=95))
+    stage.openai.script(
+        "qualify",
+        qualification(status="hot", confidence=95, readiness_signal="booking"),
+    )
 
-    await elena.says("Хочу выйти из операционки")
+    await elena.says("Хочу выйти из операционки, запишите меня")
 
     card = stage.yulia.last
     assert "Пробовала нанимать помощников" in card, "потеряна секция «ЧТО УЖЕ ПРОБОВАЛ(А)»"

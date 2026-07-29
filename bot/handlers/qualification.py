@@ -506,6 +506,14 @@ async def _route_scenario(
 ) -> None:
     """Ветвление по определённому сценарию (ТЗ, Блок 6 + разделы 8 и 11)."""
     if kind == "A_ready":
+        # Человек спросил о цене или формате — сначала ответ, потом вопросы.
+        # Прод 29.07: «сколько стоит диагностика» уходило прямо в анкету,
+        # и человек трижды повторял вопрос, не получая ответа. Стоимость
+        # диагностики бот называть вправе («Продуктовая линейка»).
+        if (message.text or "").strip().endswith("?") or _looks_like_price_question(message.text):
+            answer = await get_ai().answer_info(message.text, history=_history_text(contact))
+            if answer and answer.get("answer") and not answer.get("needs_yulia"):
+                await _send_bot_turn(message, contact, answer["answer"])
         await _send_bot_turn(message, contact, texts.A_INTRO)
         await state.set_state(Dialog.a_question_1)
     elif kind == "B_problem":
@@ -520,6 +528,24 @@ async def _route_scenario(
         await _handoff_immediately(message, state, bot, config, contact)
     else:  # C_info
         await _answer_info_question(message, state, bot, config, contact)
+
+
+_PRICE_WORDS = ("сколько стоит", "стоимость", "цена", "почём", "почем", "прайс")
+
+
+def _looks_like_price_question(text: str | None) -> bool:
+    """Вопрос о деньгах, заданный без знака вопроса («сколько стоит диагностика»)."""
+    normalized = validators.normalize_for_match(text)
+    return any(word in normalized for word in _PRICE_WORDS)
+
+
+def _history_text(contact: dict) -> str:
+    """Переписка текущего обращения строкой — контекст для справочного ответа."""
+    from bot.prompts.qualifier import current_cycle
+
+    return "\n".join(
+        f"{turn.get('role')}: {turn.get('text')}" for turn in current_cycle(_history_from(contact))
+    )
 
 
 async def _close_non_target(
