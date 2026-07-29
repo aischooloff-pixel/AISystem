@@ -192,7 +192,7 @@ READINESS_SIGNALS = {
 # бессмысленно и невежливо.
 EXPLICIT_HANDOFF_TRIGGERS = {
     "personal_contact",  # просит личное общение с Юлией
-    "booking_or_price",  # хочет записаться или спрашивает стоимость
+    "booking_request",  # хочет записаться
     "support_question",  # спрашивает о сопровождении
     "payment_ready",  # готов оплатить
     "negative_to_ai",  # негативная реакция на AI, не хочет говорить с ботом
@@ -215,7 +215,16 @@ INFERRED_HANDOFF_TRIGGERS = {
     "beyond_knowledge",  # оценка полноты базы знаний
 }
 
-HANDOFF_TRIGGERS = EXPLICIT_HANDOFF_TRIGGERS | INFERRED_HANDOFF_TRIGGERS | {"none"}
+# Вопрос о деньгах — это ВОПРОС, а не готовность. Прод 29.07: человек посреди
+# квалификации спросил «цена консультации?» и вместо цены получил «Передал
+# информацию Юлии». Стоимость диагностики бот называть вправе («Продуктовая
+# линейка»), поэтому такой запрос не прерывает разговор: бот отвечает
+# и возвращается к своему вопросу.
+ANSWER_FIRST_TRIGGER = "price_question"
+
+HANDOFF_TRIGGERS = (
+    EXPLICIT_HANDOFF_TRIGGERS | INFERRED_HANDOFF_TRIGGERS | {ANSWER_FIRST_TRIGGER, "none"}
+)
 
 # Слова острого состояния. Нужны потому, что оценке модели здесь верить
 # нельзя: практика Юлии вся про трудные ситуации, и модель, обученная быть

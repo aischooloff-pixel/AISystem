@@ -403,6 +403,27 @@ async def _intermediate_step(
     # («тяжёлая ситуация», «конфликт»), цепочку не рвут: 29.07 heavy_situation
     # прилетал на «проблемы в семье» и «выгорание» — обычные целевые запросы.
     # Флаг при этом сохраняется, и Юлия получает карточку в конце цепочки.
+    # Вопрос о цене посреди квалификации — это вопрос, а не готовность.
+    # Прод 29.07: «цена консультации?» вместо ответа получала «Передал
+    # информацию Юлии». Отвечаем и возвращаемся к своему вопросу: позиция
+    # в цепочке не двигается, счётчик ответов не растёт.
+    if trigger == validators.ANSWER_FIRST_TRIGGER and next_question is not None:
+        answer = await get_ai().answer_info(message.text, history=_history_text(contact))
+        if answer and answer.get("answer"):
+            await _send_bot_turn(message, contact, answer["answer"])
+        pending = next(
+            (
+                turn.get("text")
+                for turn in reversed(history)
+                if turn.get("role") == "bot" and (turn.get("text") or "").endswith("?")
+            ),
+            None,
+        )
+        if pending:
+            await _send_bot_turn(message, contact, pending)
+        logger.info("Вопрос о стоимости посреди квалификации — ответил и продолжаю")
+        return
+
     # Основания уже проверены сервисом: непроцитированные и «острое
     # состояние» без слов человека сняты там же. Здесь остаётся развести
     # явные (обрывают разговор) и выведенные моделью (только флаг).

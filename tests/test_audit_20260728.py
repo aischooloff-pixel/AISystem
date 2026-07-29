@@ -783,6 +783,58 @@ async def test_price_question_is_answered_before_questions(stage: Stage, questio
     assert anna.inbox.index(price) < anna.inbox.index(texts.A_INTRO), "ответ пришёл после анкеты"
 
 
+async def test_price_question_mid_chain_is_answered_not_handed_off(stage: Stage) -> None:
+    """Вопрос о цене посреди квалификации — ответ, а не передача.
+
+    Прод 29.07: клиент на втором шаге спросил «цена консультации?» и вместо
+    цены получил «Передал информацию Юлии». Вопрос о деньгах — это вопрос,
+    а не готовность записаться.
+    """
+    anna = stage.client()
+    price = "Первичная системная диагностика — 15 000 ₽, встреча до 60 минут."
+    stage.openai.script("scenario", scenario("B_problem"))
+    stage.openai.script(
+        "qualify",
+        qualification(
+            confidence=50,
+            handoff_trigger="price_question",
+            handoff_quote="цена консультации",
+        ),
+    )
+    stage.openai.script("info", info_answer(price))
+
+    await anna.says("проблемы в бизнесе")
+    await anna.says("цена консультации?")
+
+    assert price in anna.inbox, "цену не назвали"
+    assert not handed_off(anna), "вопрос о цене увёл клиента Юлии"
+    assert stage.yulia.inbox == []
+    # Бот вернулся к своему вопросу, а не поехал дальше по списку
+    assert anna.last == texts.QUESTION_DURATION
+
+
+async def test_booking_request_still_hands_off(stage: Stage) -> None:
+    """«Хочу записаться» — по-прежнему немедленная передача."""
+    anna = stage.client()
+    stage.openai.script("scenario", scenario("B_problem"))
+    stage.openai.script(
+        "qualify",
+        qualification(
+            status="hot",
+            confidence=95,
+            readiness_signal="booking",
+            handoff_trigger="booking_request",
+            handoff_quote="хочу записаться",
+            needs_yulia=True,
+        ),
+    )
+
+    await anna.says("проблемы в бизнесе")
+    await anna.says("год, хочу записаться")
+
+    assert handed_off(anna), "просьбу записаться не передали"
+
+
 async def test_explicit_words_still_cut_below_the_floor(stage: Stage) -> None:
     """Пол не мешает услышать прямую просьбу клиента."""
     anna = stage.client()
@@ -793,7 +845,7 @@ async def test_explicit_words_still_cut_below_the_floor(stage: Stage) -> None:
             status="hot",
             confidence=95,
             readiness_signal="booking",
-            handoff_trigger="booking_or_price",
+            handoff_trigger="booking_request",
             handoff_quote="хочу записаться",
             needs_yulia=True,
             needs_yulia_reason="Готов записаться",

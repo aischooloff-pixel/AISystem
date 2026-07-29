@@ -21,7 +21,7 @@ QUALIFICATION_JSON_FORMAT = """{
   "confidence": 92,
   "readiness_signal": "booking|price_and_dates|payment|personal_contact|explicit_confirmation|deadline|none",
   "request_category": "отношения|денежные сценарии|самоценность|границы|внутренняя устойчивость|профессиональные изменения|бизнес и управление|делегирование|масштабирование|переход от ручного управления к системной модели|другое",
-  "handoff_trigger": "personal_contact|booking_or_price|support_question|payment_ready|heavy_situation|negative_to_ai|conflict|b2b|education|beyond_knowledge|none",
+  "handoff_trigger": "personal_contact|booking_request|price_question|support_question|payment_ready|heavy_situation|negative_to_ai|conflict|b2b|education|beyond_knowledge|none",
   "handoff_quote": "дословные слова клиента, из которых следует основание, или null",
   "next_question": "следующий вопрос человеку своими словами",
   "next_action": "Рекомендованный следующий шаг",
@@ -46,7 +46,10 @@ QUALIFICATION_PROMPT_TEMPLATE = """Проведи квалификацию кл�
   раздела «Основания передачи Юлии»;
 - handoff_trigger — какое НАБЛЮДАЕМОЕ основание передачи прозвучало в
   диалоге: personal_contact — просит личное общение с Юлией;
-  booking_or_price — хочет записаться или спрашивает стоимость;
+  booking_request — хочет записаться («хочу записаться», «запишите меня»);
+  price_question — СПРАШИВАЕТ стоимость или даты («сколько стоит?», «цена
+  консультации?»). Это вопрос, а не готовность: бот на него отвечает
+  и возвращается к своему вопросу. Не путай с booking_request;
   support_question — спрашивает о сопровождении; payment_ready — готов
   оплатить; heavy_situation — ОСТРОЕ состояние: горе, утрата, мысли о смерти,
   паника, человеку плохо прямо сейчас; negative_to_ai — негативная реакция
