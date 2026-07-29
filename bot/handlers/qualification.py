@@ -527,14 +527,14 @@ async def _route_scenario(
 ) -> None:
     """Ветвление по определённому сценарию (ТЗ, Блок 6 + разделы 8 и 11)."""
     if kind == "A_ready":
-        # Человек спросил о цене или формате — сначала ответ, потом вопросы.
-        # Прод 29.07: «сколько стоит диагностика» уходило прямо в анкету,
-        # и человек трижды повторял вопрос, не получая ответа. Стоимость
-        # диагностики бот называть вправе («Продуктовая линейка»).
-        if (message.text or "").strip().endswith("?") or _looks_like_price_question(message.text):
-            answer = await get_ai().answer_info(message.text, history=_history_text(contact))
-            if answer and answer.get("answer") and not answer.get("needs_yulia"):
-                await _send_bot_turn(message, contact, answer["answer"])
+        # Сначала ответ на то, с чем человек пришёл, потом уточнения.
+        # Прод 29.07: «сколько стоит диагностика» и «хочу записаться»
+        # уходили прямо в анкету — человек не получал ни цены, ни того,
+        # как записаться. И цену, и порядок записи бот называть вправе
+        # («Продуктовая линейка»).
+        answer = await get_ai().answer_info(message.text, history=_history_text(contact))
+        if answer and answer.get("answer") and not answer.get("needs_yulia"):
+            await _send_bot_turn(message, contact, answer["answer"])
         await _send_bot_turn(message, contact, texts.A_INTRO)
         await state.set_state(Dialog.a_question_1)
     elif kind == "B_problem":
@@ -675,10 +675,19 @@ async def a_answer_1(message: Message, state: FSMContext) -> None:
     contact = await _contact_for_dialog(message)
     if contact is None:
         return
-    await _save_client_turn(contact, message.text, "Сценарий A, ответ на вопрос 1")
+    history = await _save_client_turn(contact, message.text, "Сценарий A, ответ на вопрос 1")
     await state.update_data(a1=message.text)
-    # Вопрос 2 сценария A — дословно из ТЗ («достичь», не «получить»)
-    await _send_bot_turn(message, contact, texts.A_QUESTION_2)
+    # Тема вопроса 2 — из ТЗ («достичь», не «получить»), формулировку
+    # подбирает модель под сказанное. Прод 29.07: на «по бизнесу» бот
+    # выдавал дословное «Какого результата хотите достичь?», а на встречное
+    # «в чем» — молча передавал Юлии.
+    qualification = await get_ai().qualify(
+        history, final=False, question_topic=texts.A_QUESTION_2
+    )
+    asked = texts.A_QUESTION_2
+    if qualification is not None:
+        asked = _adapted_or_scripted(qualification.get("next_question"), texts.A_QUESTION_2)
+    await _send_bot_turn(message, contact, asked)
     await state.set_state(Dialog.a_question_2)
 
 

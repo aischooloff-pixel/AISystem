@@ -1071,7 +1071,12 @@ async def test_ready_client_still_reaches_yulia(stage: Stage) -> None:
     """Сценарий A: два вопроса и передача — как и было."""
     anna = stage.client()
     stage.openai.script("scenario", scenario("A_ready"))
-    stage.openai.script("qualify", qualification(status="hot", confidence=96))
+    stage.openai.script("info", info_answer("Записаться можно через форму."))
+    stage.openai.script(
+        "qualify",
+        qualification(confidence=50),
+        qualification(status="hot", confidence=96, readiness_signal="booking"),
+    )
 
     await anna.start("site")
     await anna.says("Хочу записаться на диагностику")

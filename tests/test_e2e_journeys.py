@@ -446,8 +446,14 @@ async def test_scenario_a_ready_reaches_yulia_in_two_questions(stage: Stage) -> 
     с четырьмя кнопками, задача, остановка автоматики.
     """
     anna = stage.client()
+    booking = "Записаться можно через форму или напрямую Юлии."
     stage.openai.script("scenario", scenario("A_ready"))
-    stage.openai.script("qualify", qualification(status="hot", confidence=96))
+    stage.openai.script("info", info_answer(booking))
+    stage.openai.script(
+        "qualify",
+        qualification(confidence=50),
+        qualification(status="hot", confidence=96, readiness_signal="booking"),
+    )
 
     await anna.start("site")
     await anna.says("Хочу записаться на диагностику")
@@ -456,6 +462,7 @@ async def test_scenario_a_ready_reaches_yulia_in_two_questions(stage: Stage) -> 
 
     assert anna.inbox == [
         texts.GREETING,
+        booking,
         texts.A_INTRO,
         texts.A_QUESTION_2,
         texts.HANDOFF_MESSAGE,
@@ -882,8 +889,16 @@ async def test_client_handed_over_keeps_a_reference_assistant(stage: Stage) -> N
     """
     anna = stage.client()
     stage.openai.script("scenario", scenario("A_ready"))
-    stage.openai.script("qualify", qualification(status="hot", confidence=96))
-    stage.openai.script("info", info_answer("Диагностика длится до 60 минут."))
+    stage.openai.script(
+        "qualify",
+        qualification(confidence=50),
+        qualification(status="hot", confidence=96, readiness_signal="booking"),
+    )
+    stage.openai.script(
+        "info",
+        info_answer("Записаться можно через форму."),
+        info_answer("Диагностика длится до 60 минут."),
+    )
 
     await anna.start("site")
     await anna.says("Хочу записаться")
@@ -909,10 +924,15 @@ async def test_handed_over_client_without_a_question_is_told_once(stage: Stage) 
     """Не вопрос, а дополнение: подтверждаем приём, не повторяя передачу."""
     anna = stage.client()
     stage.openai.script("scenario", scenario("A_ready"))
-    stage.openai.script("qualify", qualification(status="hot", confidence=96))
+    stage.openai.script(
+        "qualify",
+        qualification(confidence=50),
+        qualification(status="hot", confidence=96, readiness_signal="booking"),
+    )
     # На реплику без вопроса база знаний ответа не даёт
     stage.openai.script(
         "info",
+        info_answer("Записаться можно через форму."),
         info_answer("", needs_yulia=True, reason="не вопрос"),
         info_answer("", needs_yulia=True, reason="не вопрос"),
     )
@@ -1135,6 +1155,9 @@ async def test_restart_in_scenario_a_resumes_at_the_right_question(stage: Stage)
         },
     )
 
+    # Формулировку второго вопроса подбирает модель; молчит — берётся текст ТЗ
+    stage.openai.script("qualify", qualification(confidence=50, next_question=None))
+
     await anna.says("Не растёт бизнес")
 
     assert anna.last == texts.A_QUESTION_2
@@ -1167,7 +1190,12 @@ async def handed_over_client(stage: Stage) -> Person:
     """Клиент, доведённый до карточки у Юлии, — исходная точка её сценариев."""
     anna = stage.client()
     stage.openai.script("scenario", scenario("A_ready"))
-    stage.openai.script("qualify", qualification(status="hot", confidence=96))
+    stage.openai.script("info", info_answer("Записаться можно через форму или напрямую Юлии."))
+    stage.openai.script(
+        "qualify",
+        qualification(confidence=50),  # адаптация второго вопроса
+        qualification(status="hot", confidence=96, readiness_signal="booking"),
+    )
     await anna.start("site")
     await anna.says("Хочу записаться")
     await anna.says("Не растёт бизнес")
