@@ -688,6 +688,49 @@ async def test_low_confidence_still_reaches_yulia_at_the_end(stage: Stage) -> No
     assert "ЭКСПЕРТНАЯ ОЦЕНКА" in stage.yulia.last.upper()
 
 
+@pytest.mark.parametrize("empty", ["null", "None", "  ", "—", "нет"])
+async def test_literal_null_never_reaches_the_client(stage: Stage, empty: str) -> None:
+    """Пустое поле от модели не уходит человеку как текст.
+
+    Прод 29.07: клиент дважды получил в чат ровно «null». Модель пишет
+    слово в строку вместо JSON null, а проверка «непустая строка» его
+    пропускала.
+    """
+    anna = stage.client()
+    stage.openai.script("scenario", scenario("B_problem"))
+    stage.openai.script("qualify", qualification(confidence=50, next_question=empty))
+
+    await anna.says("проблемы в бизнесе")
+    await anna.says("больше года")
+
+    assert anna.last == texts.QUESTION_2, f"клиент получил {empty!r} вместо вопроса"
+
+
+async def test_cold_client_is_nurtured_not_handed_over(stage: Stage) -> None:
+    """Холодный лид идёт в прогрев, а не к Юлии.
+
+    Прод 29.07: человек отвечал «давно», «не знаю», «хз» — и в конце получил
+    «Я уже передал информацию Юлии». Порог 85% отправлял к ней даже того,
+    кого AI сам назвал холодным, хотя «Маршрутизация после квалификации»
+    ведёт холодного в прогрев.
+    """
+    anna = stage.client()
+    nurturing = "Спасибо за разговор! В канале Юлии выходят материалы на эту тему."
+    stage.openai.script("scenario", scenario("B_problem"))
+    stage.openai.script(
+        "qualify",
+        *[qualification(status="cold", confidence=70, bot_response=nurturing)] * 5,
+    )
+
+    await anna.says("вроде интересно")
+    for reply in ("давно", "не знаю", "ничего", "хз", "просто так"):
+        await anna.says(reply)
+
+    assert texts.HANDOFF_MESSAGE not in anna.inbox, "холодный лид ушёл Юлии"
+    assert stage.yulia.inbox == [], "Юлию побеспокоили холодным лидом"
+    assert stage.contact(anna)["status"] == "cold"
+
+
 async def test_explicit_words_still_cut_below_the_floor(stage: Stage) -> None:
     """Пол не мешает услышать прямую просьбу клиента."""
     anna = stage.client()

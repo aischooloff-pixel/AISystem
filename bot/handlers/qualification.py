@@ -318,6 +318,21 @@ async def _finish(
     await state.set_state(Dialog.open_dialog)
 
 
+# Слова, которыми модель обозначает пустоту, когда пишет их в строку вместо
+# JSON null. Клиент получал в чат ровно «null» — прод 29.07.
+_EMPTY_WORDS = {"null", "none", "nan", "-", "—", "нет", "n/a"}
+
+
+def _adapted_or_scripted(adapted: object, scripted: str | None) -> str | None:
+    """Вопрос от модели, если он настоящий; иначе — текст из сценария."""
+    if isinstance(adapted, str):
+        text = adapted.strip()
+        if text and text.lower() not in _EMPTY_WORDS:
+            return text
+        logger.info("next_question пуст (%r) — беру формулировку из сценария", adapted)
+    return scripted
+
+
 async def _intermediate_step(
     message: Message,
     state: FSMContext,
@@ -439,8 +454,7 @@ async def _intermediate_step(
     # закреплена сценарием. Заскриптованный текст остаётся запасным: если
     # модель промолчала или выдала не строку, клиент всё равно получит
     # вопрос, а не тишину.
-    adapted = qualification.get("next_question")
-    asked = adapted.strip() if isinstance(adapted, str) and adapted.strip() else next_question
+    asked = _adapted_or_scripted(qualification.get("next_question"), next_question)
     await _send_bot_turn(message, contact, asked)
     await state.set_state(next_state)
 
